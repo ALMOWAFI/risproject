@@ -1,0 +1,84 @@
+# ROS1 Build Files
+build/
+devel/
+install/
+logs/
+.catkin_workspace
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+# C++ Build Files
+*.o
+*.a
+*.so
+*.dylib
+*.exe
+*.out
+*.app
+
+# IDE Files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# ROS1 Specific
+.rosinstall
+.rosinstall.bak
+rospack_cache/
+.ros/
+
+# Bag Files (can be large)
+*.bag
+*.bag.active
+
+# Logs
+*.log
+
+# Temporary Files
+*.tmp
+*.bak
+*.backup
+
+# Compiled Message/Service Files
+msg_gen/
+srv_gen/
+msg/*Action.msg
+msg/*ActionFeedback.msg
+msg/*ActionGoal.msg
+msg/*ActionResult.msg
+msg/*Feedback.msg
+msg/*Goal.msg
+msg/*Result.msg
+msg/_*.py
+
+# Eclipse
+.project
+.cproject
+.settings/
+
+# QtCreator
+CMakeLists.txt.user
+
+# Visual Studio Code
+.vscode/
+
+# MacOS
+.DS_Store
+
+# Windows
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# Personal Notes (optional - remove if you want to track these)
+notes.txt
+TODO.txt
+*.md.bak

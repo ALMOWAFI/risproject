@@ -1,0 +1,30 @@
+<?xml version="1.0"?>
+<launch>
+    <!-- Test/Demo launch file - runs without robot or cameras -->
+    <!-- Perfect for testing in RViz -->
+    
+    <!-- Static transform from world to panda base -->
+    <node pkg="tf2_ros" type="static_transform_publisher" name="world_to_panda" 
+          args="0 0 0 0 0 0 world panda_link0"/>
+    
+    <!-- Game parameters -->
+    <rosparam file="$(find memory_game)/config/game_params.yaml" command="load"/>
+    
+    <!-- Vision Node (test mode - publishes mock blocks) -->
+    <node name="vision_node" pkg="memory_game" type="vision_node" output="screen">
+        <param name="test_mode" value="true"/>
+    </node>
+    
+    <!-- Game Logic Node -->
+    <node name="game_node" pkg="memory_game" type="game_node" output="screen">
+    </node>
+    
+    <!-- Motion Node (simulated - no real robot) -->
+    <node name="motion_node" pkg="memory_game" type="motion_node" output="screen">
+    </node>
+    
+    <!-- RViz -->
+    <node name="rviz" pkg="rviz" type="rviz" 
+          args="-d $(find memory_game)/config/rviz_config.rviz" output="screen"/>
+    
+</launch>

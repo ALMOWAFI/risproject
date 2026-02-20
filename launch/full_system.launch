@@ -1,0 +1,32 @@
+<?xml version="1.0"?>
+<launch>
+    <!-- Arguments -->
+    <arg name="simulation" default="false"/>
+    <arg name="use_rviz" default="true"/>
+    
+    <!-- Game parameters -->
+    <rosparam file="$(find memory_game)/config/game_params.yaml" command="load"/>
+    
+    <!-- Vision Node -->
+    <node name="vision_node" pkg="memory_game" type="vision_node" output="screen">
+        <remap from="/camera/color/image_raw" to="/camera/color/image_raw"/>
+        <remap from="/camera/depth/image_raw" to="/camera/depth/image_raw"/>
+    </node>
+    
+    <!-- Game Logic Node -->
+    <node name="game_node" pkg="memory_game" type="game_node" output="screen">
+    </node>
+    
+    <!-- Motion Node -->
+    <node name="motion_node" pkg="memory_game" type="motion_node" output="screen">
+    </node>
+    
+    <!-- RViz (optional) -->
+    <node if="$(arg use_rviz)" name="rviz" pkg="rviz" type="rviz" 
+          args="-d $(find memory_game)/config/rviz_config.rviz" output="screen"/>
+    
+    <!-- Simulation or Real Robot -->
+    <include if="$(arg simulation)" file="$(find memory_game)/launch/simulation.launch"/>
+    <include unless="$(arg simulation)" file="$(find memory_game)/launch/real_robot.launch"/>
+    
+</launch>

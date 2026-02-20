@@ -1,0 +1,20 @@
+<?xml version="1.0"?>
+<launch>
+    <!-- Launch only vision node for testing -->
+    
+    <!-- Vision Node -->
+    <node name="vision_node" pkg="memory_game" type="vision_node" output="screen">
+        <remap from="/camera/color/image_raw" to="/camera/color/image_raw"/>
+        <remap from="/camera/depth/image_raw" to="/camera/depth/image_raw"/>
+    </node>
+    
+    <!-- Image viewer for debugging -->
+    <node name="image_view" pkg="image_view" type="image_view">
+        <remap from="image" to="/camera/color/image_raw"/>
+    </node>
+    
+    <!-- RViz for visualization -->
+    <node name="rviz" pkg="rviz" type="rviz" 
+          args="-d $(find memory_game)/config/rviz_config.rviz"/>
+    
+</launch>

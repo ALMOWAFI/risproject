@@ -1,0 +1,64 @@
+# Game parameters configuration
+
+game_node:
+  # Initial sequence length
+  initial_sequence_length: 3
+  
+  # Points per correct sequence
+  points_per_level: 10
+  
+  # Maximum level
+  max_level: 10
+  
+  # Timeout for player input (seconds)
+  player_timeout: 30.0
+  
+  # Block detection parameters
+  block_detection:
+    min_confidence: 0.7
+    detection_rate: 10.0  # Hz
+    
+vision_node:
+  # Camera topics
+  color_topic: "/camera/color/image_raw"
+  depth_topic: "/camera/depth/image_raw"
+  
+  # Block detection parameters
+  block_colors:
+    - "red"
+    - "green"
+    - "blue"
+    - "yellow"
+  
+  # Detection thresholds
+  color_threshold: 30
+  min_block_area: 100  # pixels
+  max_block_area: 10000  # pixels
+  
+  # Player interaction detection
+  interaction:
+    min_hand_distance: 0.05  # meters
+    selection_timeout: 2.0  # seconds
+    
+motion_node:
+  # Robot parameters
+  robot_base_frame: "panda_link0"
+  end_effector_frame: "panda_link8"
+  
+  # Motion parameters
+  planning_time: 5.0  # seconds
+  max_velocity: 0.1  # m/s
+  max_acceleration: 0.1  # m/s^2
+  
+  # Home position (x, y, z, qx, qy, qz, qw)
+  home_position:
+    x: 0.3
+    y: 0.0
+    z: 0.4
+    qx: 0.0
+    qy: 0.0
+    qz: 0.0
+    qw: 1.0
+  
+  # Pointing offset above block
+  pointing_offset: 0.1  # meters
