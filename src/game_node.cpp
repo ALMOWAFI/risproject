@@ -11,7 +11,6 @@
  *   - /game_state (String) - current game state
  *   - /score (Int32) - current score
  */
-
 #include <ros/ros.h>
 #include <memory_game/BlockArray.h>
 #include <memory_game/PlayerSelection.h>
@@ -21,13 +20,16 @@
 #include <vector>
 #include <random>
 #include <map>
+#include <vector>
+#include <random>
+#include <map>
 
-enum GameState {
+enum GameState{
+    IDLE,
     SHOWING_SEQUENCE,
     WAITING_PLAYER,
     CHECKING_INPUT,
-    GAME_OVER,
-    IDLE
+    GAME_OVER
 };
 
 class GameNode {
@@ -38,8 +40,10 @@ private:
     ros::Publisher target_pub_;
     ros::Publisher state_pub_;
     ros::Publisher score_pub_;
-    
+    ros::Timer next_round_timer;
+
     GameState current_state_;
+    std::vector<int> available_block_ids_;
     std::vector<int> sequence_;
     std::vector<int> player_input_;
     int current_sequence_index_;
