@@ -17,9 +17,10 @@
   <build_depend>sensor_msgs</build_depend>
   <build_depend>visualization_msgs</build_depend>
   <build_depend>message_generation</build_depend>
-  <!-- Optional dependencies for future implementation -->
-  <!-- <build_depend>cv_bridge</build_depend> -->
-  <!-- <build_depend>image_transport</build_depend> -->
+  <build_depend>cv_bridge</build_depend>
+  <build_depend>image_transport</build_depend>
+  <build_depend>image_geometry</build_depend>
+  <build_depend>tf2_geometry_msgs</build_depend>
   <!-- <build_depend>pcl_ros</build_depend> -->
   <build_depend>tf</build_depend>
   <build_depend>tf2_ros</build_depend>
@@ -34,9 +35,10 @@
   <exec_depend>sensor_msgs</exec_depend>
   <exec_depend>visualization_msgs</exec_depend>
   <exec_depend>message_runtime</exec_depend>
-  <!-- Optional dependencies for future implementation -->
-  <!-- <exec_depend>cv_bridge</exec_depend> -->
-  <!-- <exec_depend>image_transport</exec_depend> -->
+  <exec_depend>cv_bridge</exec_depend>
+  <exec_depend>image_transport</exec_depend>
+  <exec_depend>image_geometry</exec_depend>
+  <exec_depend>tf2_geometry_msgs</exec_depend>
   <!-- <exec_depend>pcl_ros</exec_depend> -->
   <exec_depend>tf</exec_depend>
   <exec_depend>tf2_ros</exec_depend>
