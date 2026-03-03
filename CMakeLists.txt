@@ -9,13 +9,17 @@ find_package(catkin REQUIRED COMPONENTS
   geometry_msgs
   sensor_msgs
   visualization_msgs
+  cv_bridge
+  image_transport
+  image_geometry
+  tf2_geometry_msgs
   message_generation
   tf
   tf2_ros
 )
 
 ## System dependencies (optional - only needed when implementing vision)
-# find_package(OpenCV REQUIRED)
+find_package(OpenCV REQUIRED)
 # find_package(PCL REQUIRED)
 # find_package(Eigen3 REQUIRED)
 
@@ -42,7 +46,7 @@ generate_messages(
 ## Declare this project as a catkin package
 catkin_package(
   INCLUDE_DIRS include
-  CATKIN_DEPENDS roscpp rospy std_msgs geometry_msgs sensor_msgs visualization_msgs message_runtime
+  CATKIN_DEPENDS roscpp rospy std_msgs geometry_msgs sensor_msgs visualization_msgs cv_bridge image_transport image_geometry tf2_geometry_msgs message_runtime
 )
 
 ###########
@@ -53,20 +57,21 @@ catkin_package(
 include_directories(
   include
   ${catkin_INCLUDE_DIRS}
+  ${OpenCV_INCLUDE_DIRS}
 )
 
 ## Add executables
 add_executable(vision_node src/vision_node.cpp)
-target_link_libraries(vision_node ${catkin_LIBRARIES})
-add_dependencies(vision_node ${catkin_EXPORTED_TARGETS})
+target_link_libraries(vision_node ${catkin_LIBRARIES} ${OpenCV_LIBRARIES})
+add_dependencies(vision_node ${${PROJECT_NAME}_EXPORTED_TARGETS} ${catkin_EXPORTED_TARGETS})
 
 add_executable(game_node src/game_node.cpp)
 target_link_libraries(game_node ${catkin_LIBRARIES})
-add_dependencies(game_node ${catkin_EXPORTED_TARGETS})
+add_dependencies(game_node ${${PROJECT_NAME}_EXPORTED_TARGETS} ${catkin_EXPORTED_TARGETS})
 
 add_executable(motion_node src/motion_node.cpp)
 target_link_libraries(motion_node ${catkin_LIBRARIES})
-add_dependencies(motion_node ${catkin_EXPORTED_TARGETS})
+add_dependencies(motion_node ${${PROJECT_NAME}_EXPORTED_TARGETS} ${catkin_EXPORTED_TARGETS})
 
 #############
 ## Install ##

@@ -124,4 +124,6 @@ When game says "Waiting for player input...", type block IDs (0-3).
 - **[TASK_BREAKDOWN.md](TASK_BREAKDOWN.md)** — How to divide work, task assignments, timeline
 - **[COLLABORATION.md](COLLABORATION.md)** — Git workflow, how to work together safely
 - **[ROS1_GUIDE.md](ROS1_GUIDE.md)** — ROS commands and setup for this project
+- **[VISION_TUNING.md](VISION_TUNING.md)** — Step-by-step calibration guide for `vision_node` on real camera input
 - **[docs/architecture.md](docs/architecture.md)** — System design, game logic, topics
+- **[docs/vision_node_cpp.md](docs/vision_node_cpp.md)** — Internal explanation of the C++ `vision_node` pipeline
