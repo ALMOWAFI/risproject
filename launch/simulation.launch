@@ -15,20 +15,14 @@
     </include>
     
     <!-- Spawn Panda robot -->
-    <!-- TODO: Add Panda robot spawn configuration -->
-    <!-- Example:
-    <include file="$(find panda_gazebo)/launch/panda_world.launch"/>
-    -->
-    
-    <!-- Spawn blocks in simulation -->
-    <!-- TODO: Add block spawning configuration -->
-    
-    <!-- Spawn camera in simulation -->
-    <!-- TODO: Add camera configuration -->
-    
-    <param name="robot_description" command="$(find xacro)/xacro $(find franka_description)/robots/panda/panda.urdf.xacro"/>
-    
-    <node name="spawn_urdf" pkg="gazebo_ros" type="spawn_model" 
-          args="-param robot_description -urdf -model panda"/>
-    
+<!-- Spawn Panda robot -->
+
+<param name="robot_description"
+       command="$(find xacro)/xacro $(find franka_description)/robots/panda/panda.urdf.xacro"/>
+
+<node name="spawn_urdf"
+      pkg="gazebo_ros"
+      type="spawn_model"
+      args="-param robot_description -urdf -model panda"/>
+
 </launch>
