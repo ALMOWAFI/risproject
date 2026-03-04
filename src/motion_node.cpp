@@ -2,6 +2,7 @@
 #include <visualization_msgs/MarkerArray.h>
 #include <memory_game/Block.h>
 #include <std_msgs/String.h>
+#include <geometry_msgs/Point.h>
 #include <cmath>
 
 // ---------------- STATE MACHINE ----------------
@@ -25,6 +26,7 @@ geometry_msgs::Point home_pos;
 double speed = 0.02;
 ros::Time state_start_time;
 
+
 // ---------------- STATUS PUBLISH ----------------
 void publishStatus(const std::string& state)
 {
@@ -32,6 +34,7 @@ void publishStatus(const std::string& state)
     msg.data = state;
     status_pub.publish(msg);
 }
+
 
 // ---------------- COLOR BY STATE ----------------
 void setColor(visualization_msgs::Marker& marker)
@@ -41,18 +44,30 @@ void setColor(visualization_msgs::Marker& marker)
     switch(current_state)
     {
         case MOVING_TO_TARGET:
-            marker.color.r = 1.0; marker.color.g = 1.0; marker.color.b = 0.0; // Yellow
+            marker.color.r = 1.0;
+            marker.color.g = 1.0;
+            marker.color.b = 0.0; // Yellow
             break;
+
         case AT_TARGET:
-            marker.color.r = 0.0; marker.color.g = 1.0; marker.color.b = 0.0; // Green
+            marker.color.r = 0.0;
+            marker.color.g = 1.0;
+            marker.color.b = 0.0; // Green
             break;
+
         case RETURNING_HOME:
-            marker.color.r = 0.0; marker.color.g = 0.0; marker.color.b = 1.0; // Blue
+            marker.color.r = 0.0;
+            marker.color.g = 0.0;
+            marker.color.b = 1.0; // Blue
             break;
+
         default:
-            marker.color.r = 1.0; marker.color.g = 1.0; marker.color.b = 1.0; // White
+            marker.color.r = 1.0;
+            marker.color.g = 1.0;
+            marker.color.b = 1.0; // White
     }
 }
+
 
 // ---------------- PUBLISH MARKER ----------------
 void publishMarker()
@@ -80,6 +95,18 @@ void publishMarker()
     marker_pub.publish(array);
 }
 
+
+// ---------------- DISTANCE FUNCTION ----------------
+double distance3D(const geometry_msgs::Point& a, const geometry_msgs::Point& b)
+{
+    double dx = a.x - b.x;
+    double dy = a.y - b.y;
+    double dz = a.z - b.z;
+
+    return sqrt(dx*dx + dy*dy + dz*dz);
+}
+
+
 // ---------------- MOVE STEP ----------------
 void moveTowards(const geometry_msgs::Point& goal)
 {
@@ -97,6 +124,7 @@ void moveTowards(const geometry_msgs::Point& goal)
     current_pos.z += speed * dz;
 }
 
+
 // ---------------- TARGET CALLBACK ----------------
 void targetCallback(const memory_game::Block::ConstPtr& msg)
 {
@@ -113,6 +141,7 @@ void targetCallback(const memory_game::Block::ConstPtr& msg)
     publishStatus("MOVING_TO_TARGET");
 }
 
+
 // ---------------- MAIN ----------------
 int main(int argc, char** argv)
 {
@@ -121,8 +150,10 @@ int main(int argc, char** argv)
 
     marker_pub = nh.advertise<visualization_msgs::MarkerArray>("/visualization_marker_array", 10);
     status_pub = nh.advertise<std_msgs::String>("/motion_status", 10);
+
     ros::Subscriber sub = nh.subscribe("/target_block", 10, targetCallback);
 
+    // Home position
     home_pos.x = 0.3;
     home_pos.y = 0.0;
     home_pos.z = 0.2;
@@ -135,32 +166,44 @@ int main(int argc, char** argv)
     {
         switch(current_state)
         {
+
             case MOVING_TO_TARGET:
+
                 moveTowards(target_pos);
-                if (fabs(current_pos.x - target_pos.x) < 0.01)
+
+                if (distance3D(current_pos, target_pos) < 0.01)
                 {
                     current_state = AT_TARGET;
                     state_start_time = ros::Time::now();
                     publishStatus("AT_TARGET");
                 }
+
                 break;
 
+
             case AT_TARGET:
+
                 if ((ros::Time::now() - state_start_time).toSec() > 1.0)
                 {
                     current_state = RETURNING_HOME;
                     publishStatus("RETURNING_HOME");
                 }
+
                 break;
 
+
             case RETURNING_HOME:
+
                 moveTowards(home_pos);
-                if (fabs(current_pos.x - home_pos.x) < 0.01)
+
+                if (distance3D(current_pos, home_pos) < 0.01)
                 {
                     current_state = IDLE;
                     publishStatus("IDLE");
                 }
+
                 break;
+
 
             default:
                 break;
