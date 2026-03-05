@@ -42,6 +42,14 @@ vision_node:
   enable_debug_images: false
   smoothing_alpha: 0.35     # 0=no update, 1=no smoothing
 
+  # Player selection (real hand detection)
+  enable_player_detection: true
+  max_select_distance_m: 0.12   # hand within this distance of block (meters)
+  selection_cooldown_sec: 1.0   # min time between selections
+  min_hand_area: 500            # min skin blob area (pixels)
+  min_selection_stable_frames: 3
+  require_hand_release: true
+
   # HSV ranges format: [hmin, hmax, smin, smax, vmin, vmax]
   hsv_ranges:
     red:
@@ -76,4 +84,3 @@ motion_node:
   
   # Pointing offset above block
   pointing_offset: 0.1  # meters
-

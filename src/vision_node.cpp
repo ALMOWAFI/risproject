@@ -5,6 +5,7 @@
  * This node detects colored blocks from RGB + depth streams and publishes:
  *   - /detected_blocks (memory_game/BlockArray)
  *   - /visualization_marker_array (visualization_msgs/MarkerArray)
+ *   - /player_selection (memory_game/PlayerSelection) when hand is near a block
  *
  * Core pipeline:
  *   1) RGB BGR -> HSV conversion
@@ -29,6 +30,7 @@
 #include <image_transport/image_transport.h>
 #include <memory_game/Block.h>
 #include <memory_game/BlockArray.h>
+#include <memory_game/PlayerSelection.h>
 #include <opencv2/core.hpp>
 #include <opencv2/imgproc.hpp>
 #include <ros/ros.h>
@@ -98,11 +100,13 @@ public:
           tf_buffer_(),
           tf_listener_(tf_buffer_),
           has_depth_(false),
-          has_camera_model_(false) {
+          has_camera_model_(false),
+          last_selected_block_id_(-1) {
         loadParams();
 
         blocks_pub_ = nh_.advertise<memory_game::BlockArray>("/detected_blocks", 10);
         markers_pub_ = nh_.advertise<visualization_msgs::MarkerArray>("/visualization_marker_array", 10);
+        selection_pub_ = nh_.advertise<memory_game::PlayerSelection>("/player_selection", 10);
 
         if (enable_debug_images_) {
             debug_mask_pub_ = it_.advertise("/vision/debug_mask", 1);
@@ -141,10 +145,21 @@ private:
         pnh_.param("enable_debug_images", enable_debug_images_, false);
         pnh_.param("smoothing_alpha", smoothing_alpha_, 0.35);
 
+        pnh_.param("enable_player_detection", enable_player_detection_, true);
+        pnh_.param("max_select_distance_m", max_select_distance_m_, 0.12);
+        pnh_.param("selection_cooldown_sec", selection_cooldown_sec_, 1.0);
+        pnh_.param("min_hand_area", min_hand_area_, 500.0);
+        pnh_.param("min_selection_stable_frames", min_selection_stable_frames_, 3);
+        pnh_.param("require_hand_release", require_hand_release_, true);
+
         if (mask_open_iterations_ < 0) mask_open_iterations_ = 0;
         if (mask_close_iterations_ < 0) mask_close_iterations_ = 0;
         if (depth_window_radius_ < 0) depth_window_radius_ = 0;
         smoothing_alpha_ = std::max(0.0, std::min(1.0, smoothing_alpha_));
+        max_select_distance_m_ = std::max(0.01, max_select_distance_m_);
+        selection_cooldown_sec_ = std::max(0.0, selection_cooldown_sec_);
+        min_hand_area_ = std::max(50.0, min_hand_area_);
+        min_selection_stable_frames_ = std::max(1, min_selection_stable_frames_);
 
         initDefaultColors();
         loadHsvRangesFromParams();
@@ -348,11 +363,140 @@ private:
         publishBlocks(blocks, msg->header.stamp);
         publishMarkers(blocks, msg->header.stamp);
 
+        if (enable_player_detection_ && !blocks.empty()) {
+            geometry_msgs::Point hand_base;
+            if (detectHandInBase(msg->header, cv_ptr->image, hsv, hand_base)) {
+                tryPublishPlayerSelection(blocks, hand_base, msg->header);
+            } else {
+                resetSelectionTrackingForNoHand();
+            }
+        } else if (enable_player_detection_) {
+            resetSelectionTrackingForNoHand();
+        }
+
         if (enable_debug_images_) {
             publishDebugImages(debug_mask_accum, debug_overlay, msg->header);
         }
 
         ROS_DEBUG_THROTTLE(1.0, "Published %zu detected blocks", blocks.size());
+    }
+
+    bool detectHandInBase(const std_msgs::Header& header,
+                          const cv::Mat& bgr,
+                          const cv::Mat& hsv,
+                          geometry_msgs::Point& hand_base) {
+        cv::Mat skin_mask;
+        cv::inRange(hsv, cv::Scalar(0, 40, 40), cv::Scalar(15, 255, 255), skin_mask);
+        cv::Mat skin_mask2;
+        cv::inRange(hsv, cv::Scalar(165, 40, 40), cv::Scalar(180, 255, 255), skin_mask2);
+        cv::bitwise_or(skin_mask, skin_mask2, skin_mask);
+
+        std::vector<std::vector<cv::Point> > contours;
+        cv::findContours(skin_mask, contours, cv::RETR_EXTERNAL, cv::CHAIN_APPROX_SIMPLE);
+
+        int best_idx = -1;
+        double best_area = 0.0;
+        for (size_t i = 0; i < contours.size(); ++i) {
+            const double area = cv::contourArea(contours[i]);
+            if (area < min_hand_area_ || area > max_block_area_) {
+                continue;
+            }
+            if (area > best_area) {
+                best_area = area;
+                best_idx = static_cast<int>(i);
+            }
+        }
+        if (best_idx < 0) {
+            return false;
+        }
+
+        const cv::Moments m = cv::moments(contours[best_idx]);
+        if (m.m00 <= 1e-6) {
+            return false;
+        }
+        const int u = static_cast<int>(m.m10 / m.m00);
+        const int v = static_cast<int>(m.m01 / m.m00);
+
+        double depth_m = 0.0;
+        if (!readDepthMedianMeters(u, v, depth_m)) {
+            return false;
+        }
+        return projectAndTransformToBase(u, v, depth_m, header, hand_base);
+    }
+
+    void tryPublishPlayerSelection(const std::vector<memory_game::Block>& blocks,
+                                    const geometry_msgs::Point& hand_base,
+                                    const std_msgs::Header& header) {
+        const ros::Time now = ros::Time::now();
+        const bool cooldown_ok = (now - last_selection_time_).toSec() >= selection_cooldown_sec_;
+
+        int best_id = -1;
+        double best_dist = max_select_distance_m_ + 1.0;
+        std::string best_color;
+
+        for (const memory_game::Block& b : blocks) {
+            const double dx = hand_base.x - b.position.x;
+            const double dy = hand_base.y - b.position.y;
+            const double dz = hand_base.z - b.position.z;
+            const double d = std::sqrt(dx * dx + dy * dy + dz * dz);
+            if (d < best_dist) {
+                best_dist = d;
+                best_id = b.id;
+                best_color = b.color;
+            }
+        }
+
+        if (best_id < 0 || best_dist > max_select_distance_m_) {
+            stable_candidate_id_ = -1;
+            stable_candidate_count_ = 0;
+            return;
+        }
+
+        if (best_id != stable_candidate_id_) {
+            stable_candidate_id_ = best_id;
+            stable_candidate_count_ = 1;
+        } else {
+            ++stable_candidate_count_;
+        }
+
+        if (stable_candidate_count_ < min_selection_stable_frames_) {
+            return;
+        }
+
+        if (!cooldown_ok) {
+            return;
+        }
+
+        if (!selection_armed_) {
+            return;
+        }
+
+        memory_game::PlayerSelection sel;
+        sel.header = header;
+        sel.header.frame_id = target_frame_;
+        sel.block_id = best_id;
+        sel.color = best_color;
+        sel.selection_type = "pointed";
+        sel.selection_time = now;
+        sel.confidence = static_cast<float>(1.0 - best_dist / max_select_distance_m_);
+        selection_pub_.publish(sel);
+
+        last_selection_time_ = now;
+        last_selected_block_id_ = best_id;
+        stable_candidate_id_ = -1;
+        stable_candidate_count_ = 0;
+        if (require_hand_release_) {
+            selection_armed_ = false;
+        }
+        ROS_INFO_THROTTLE(0.5, "Player selection: block %d (%s)", best_id, best_color.c_str());
+    }
+
+    void resetSelectionTrackingForNoHand() {
+        stable_candidate_id_ = -1;
+        stable_candidate_count_ = 0;
+        if (require_hand_release_) {
+            selection_armed_ = true;
+        }
     }
 
     DetectionResult detectColorBlob(const cv::Mat& hsv, const ColorConfig& cfg) const {
@@ -573,6 +717,7 @@ private:
 
     ros::Publisher blocks_pub_;
     ros::Publisher markers_pub_;
+    ros::Publisher selection_pub_;
 
     image_transport::Publisher debug_mask_pub_;
     image_transport::Publisher debug_overlay_pub_;
@@ -595,6 +740,18 @@ private:
     double marker_size_m_;
     bool enable_debug_images_;
     double smoothing_alpha_;
+
+    bool enable_player_detection_;
+    double max_select_distance_m_;
+    double selection_cooldown_sec_;
+    double min_hand_area_;
+    int min_selection_stable_frames_;
+    bool require_hand_release_;
+    ros::Time last_selection_time_;
+    int last_selected_block_id_;
+    int stable_candidate_id_ = -1;
+    int stable_candidate_count_ = 0;
+    bool selection_armed_ = true;
 
     std::vector<ColorConfig> color_configs_;
 
