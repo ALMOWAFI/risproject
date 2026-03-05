@@ -8,6 +8,10 @@
       type="robot_state_publisher"
       name="robot_state_publisher"/>
 
+<node pkg="joint_state_publisher"
+      type="joint_state_publisher"
+      name="joint_state_publisher"/>
+
 <!-- Static transform -->
 <node pkg="tf2_ros"
       type="static_transform_publisher"
