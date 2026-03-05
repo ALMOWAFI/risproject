@@ -24,11 +24,12 @@
     </node>
     
     <!-- RViz (optional) -->
-    <node if="$(arg use_rviz)" name="rviz" pkg="rviz" type="rviz" 
-          args="-d $(find memory_game)/config/rviz_config.rviz" output="screen"/>
+   <!-- <node if="$(arg use_rviz)" name="rviz" pkg="rviz" type="rviz" 
+          args="-d $(find memory_game)/config/rviz_config.rviz" output="screen"/> -->
     
     <!-- Simulation or Real Robot -->
     <include if="$(arg simulation)" file="$(find memory_game)/launch/simulation.launch"/>
-    <include unless="$(arg simulation)" file="$(find memory_game)/launch/real_robot.launch"/>
-    
+   <!-- <include unless="$(arg simulation)" file="$(find memory_game)/launch/real_robot.launch"/> -->
+    <include file="$(find memory_game)/launch/test_rviz.launch"/>
+
 </launch>

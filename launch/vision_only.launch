@@ -3,7 +3,6 @@
     <!-- Launch only real vision node -->
     
     <!-- Vision Node -->
-    <node name="vision_node" pkg="memory_game" type="vision_node" output="screen">
         <param name="color_topic" value="/camera/color/image_raw"/>
         <param name="depth_topic" value="/camera/aligned_depth_to_color/image_raw"/>
         <param name="camera_info_topic" value="/camera/color/camera_info"/>
