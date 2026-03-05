@@ -67,7 +67,6 @@ public:
         publishState("IDLE");
         publishScore();
 
-        // Start shortly after launch (no sleep blocking)
         start_timer_ = nh_.createTimer(ros::Duration(start_delay_sec_), &GameNode::startTimerCb, this, true);
 
         ROS_INFO("game_node ready (final).");
@@ -94,7 +93,6 @@ private:
             gen_.seed(static_cast<unsigned>(seed_param));
         }
 
-        // default target pose if block not detected yet
         pnh_.param("default_x", default_target_.x, 0.40);
         pnh_.param("default_y", default_target_.y, 0.00);
         pnh_.param("default_z", default_target_.z, 0.05);
@@ -123,7 +121,6 @@ private:
         if (state_ == GameState::SHOWING_SEQUENCE && waiting_motion_) {
             if (last_motion_state_ == "AT_TARGET") {
                 waiting_motion_ = false;
-                // hold at target briefly, then proceed
                 show_timer_ = nh_.createTimer(ros::Duration(show_hold_sec_), &GameNode::showHoldCb, this, true);
             }
         }
@@ -138,7 +135,6 @@ private:
         ROS_INFO("Player selected: id=%d color=%s (%d/%zu)",
                  msg->block_id, msg->color.c_str(), player_index_, sequence_.size());
 
-        // Reset timeout on every valid click
         resetPlayerTimeout();
 
         if (player_index_ >= static_cast<int>(sequence_.size())) {
@@ -211,8 +207,6 @@ private:
         state_ = GameState::SHOWING_SEQUENCE;
         publishState("SHOWING_SEQUENCE");
 
-        // If no motion_node running, we still "work" by using a fixed timer fallback.
-        // But since you have motion_node, we try to sync on /motion_status.
         showNextBlock();
     }
 
@@ -238,7 +232,6 @@ private:
 
         show_index_++;
 
-        // Wait until motion reports AT_TARGET, otherwise fallback timer if we never receive motion_status.
         waiting_motion_ = true;
 
         if (!have_motion_state_) {
@@ -246,7 +239,6 @@ private:
             waiting_motion_ = false;
             show_timer_ = nh_.createTimer(ros::Duration(show_hold_sec_), &GameNode::showHoldCb, this, true);
         } else {
-            // safety fallback in case motion_status is alive but never reaches
             show_failsafe_timer_ =
                 nh_.createTimer(ros::Duration(show_hold_sec_ + 2.0), &GameNode::showFailSafeCb, this, true);
         }
@@ -278,7 +270,6 @@ private:
 
             ROS_INFO("✓ Correct! Score=%d Level=%d", score_, level_);
 
-            // Next round after short pause (no sleep)
             state_ = GameState::IDLE;
             publishState("ROUND_PAUSE");
             round_timer_ = nh_.createTimer(ros::Duration(round_pause_sec_), &GameNode::roundPauseCb, this, true);
