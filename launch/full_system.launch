@@ -1,7 +1,6 @@
 <?xml version="1.0"?>
 <launch>
     <!-- Arguments -->
-    <arg name="simulation" default="false"/>
     <arg name="use_rviz" default="true"/>
     
     <!-- Game parameters -->
@@ -27,9 +26,8 @@
    <!-- <node if="$(arg use_rviz)" name="rviz" pkg="rviz" type="rviz" 
           args="-d $(find memory_game)/config/rviz_config.rviz" output="screen"/> -->
     
-    <!-- Simulation or Real Robot -->
-    <include if="$(arg simulation)" file="$(find memory_game)/launch/simulation.launch"/>
-   <!-- <include unless="$(arg simulation)" file="$(find memory_game)/launch/real_robot.launch"/> -->
+    <!-- Real Robot include (enable when running on hardware) -->
+    <!-- <include file="$(find memory_game)/launch/real_robot.launch"/> -->
     <include file="$(find memory_game)/launch/test_rviz.launch"/>
 
 </launch>
