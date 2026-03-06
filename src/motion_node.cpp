@@ -4,6 +4,7 @@
 #include <std_msgs/String.h>
 #include <geometry_msgs/Point.h>
 #include <cmath>
+#include <deque>
 
 // ---------------- STATE MACHINE ----------------
 enum MotionState {
@@ -22,9 +23,31 @@ ros::Publisher status_pub;
 geometry_msgs::Point current_pos;
 geometry_msgs::Point target_pos;
 geometry_msgs::Point home_pos;
+std::deque<memory_game::Block> target_queue;
 
 double speed = 0.02;
 ros::Time state_start_time;
+
+void publishStatus(const std::string& state);
+
+void startNextTarget()
+{
+    if (target_queue.empty()) {
+        return;
+    }
+
+    const memory_game::Block next = target_queue.front();
+    target_queue.pop_front();
+
+    ROS_INFO("Moving to block %d", next.id);
+
+    target_pos.x = 0.4;
+    target_pos.y = 0.1 * next.id;
+    target_pos.z = 0.2;
+
+    current_state = MOVING_TO_TARGET;
+    publishStatus("MOVING_TO_TARGET");
+}
 
 
 // ---------------- STATUS PUBLISH ----------------
@@ -128,17 +151,12 @@ void moveTowards(const geometry_msgs::Point& goal)
 // ---------------- TARGET CALLBACK ----------------
 void targetCallback(const memory_game::Block::ConstPtr& msg)
 {
-    if(current_state != IDLE)
-        return;
+    target_queue.push_back(*msg);
+    ROS_INFO("Queued block %d (pending=%zu)", msg->id, target_queue.size());
 
-    ROS_INFO("Moving to block %d", msg->id);
-
-    target_pos.x = 0.4;
-    target_pos.y = 0.1 * msg->id;
-    target_pos.z = 0.2;
-
-    current_state = MOVING_TO_TARGET;
-    publishStatus("MOVING_TO_TARGET");
+    if (current_state == IDLE) {
+        startNextTarget();
+    }
 }
 
 
@@ -159,6 +177,7 @@ int main(int argc, char** argv)
     home_pos.z = 0.2;
 
     current_pos = home_pos;
+    publishStatus("IDLE");
 
     ros::Rate rate(60);
 
@@ -198,8 +217,12 @@ int main(int argc, char** argv)
 
                 if (distance3D(current_pos, home_pos) < 0.01)
                 {
-                    current_state = IDLE;
-                    publishStatus("IDLE");
+                    if (!target_queue.empty()) {
+                        startNextTarget();
+                    } else {
+                        current_state = IDLE;
+                        publishStatus("IDLE");
+                    }
                 }
 
                 break;

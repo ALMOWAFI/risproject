@@ -53,6 +53,7 @@ private:
     int player_index_;
 
     bool waiting_for_motion_;
+    bool motion_started_for_sequence_;
     bool have_motion_state_;
     std::string last_motion_state_;
 
@@ -81,6 +82,7 @@ public:
           show_index_(0),
           player_index_(0),
           waiting_for_motion_(false),
+          motion_started_for_sequence_(false),
           have_motion_state_(false),
           gen_(std::random_device{}()) {
         loadParams();
@@ -146,13 +148,20 @@ private:
         have_motion_state_ = true;
 
         if (current_state_ == GameState::SHOWING_SEQUENCE && waiting_for_motion_) {
-            if (last_motion_state_ == "AT_TARGET") {
+            if (last_motion_state_ == "MOVING_TO_TARGET" ||
+                last_motion_state_ == "AT_TARGET" ||
+                last_motion_state_ == "RETURNING_HOME") {
+                motion_started_for_sequence_ = true;
+            }
+
+            // Sequence is done once motion returns to IDLE after executing queued targets.
+            if (last_motion_state_ == "IDLE" && motion_started_for_sequence_) {
                 waiting_for_motion_ = false;
-                show_timer_ = nh_.createTimer(
-                    ros::Duration(show_hold_sec_),
-                    &GameNode::showHoldCallback,
-                    this,
-                    true);
+                motion_started_for_sequence_ = false;
+                current_state_ = GameState::WAITING_PLAYER;
+                publishState("WAITING_PLAYER");
+                ROS_INFO("Sequence complete. Waiting for player input...");
+                resetPlayerTimeout();
             }
         }
     }
@@ -198,13 +207,12 @@ private:
 
     void showFailsafeCallback(const ros::TimerEvent&) {
         if (current_state_ == GameState::SHOWING_SEQUENCE && waiting_for_motion_) {
-            ROS_WARN("No AT_TARGET received, advancing with failsafe");
+            ROS_WARN("Motion sequence completion timeout; switching to player input");
             waiting_for_motion_ = false;
-            show_timer_ = nh_.createTimer(
-                ros::Duration(0.01),
-                &GameNode::showNextCallback,
-                this,
-                true);
+            motion_started_for_sequence_ = false;
+            current_state_ = GameState::WAITING_PLAYER;
+            publishState("WAITING_PLAYER");
+            resetPlayerTimeout();
         }
     }
 
@@ -235,6 +243,7 @@ private:
         show_index_ = 0;
         player_index_ = 0;
         waiting_for_motion_ = false;
+        motion_started_for_sequence_ = false;
 
         int sequence_length = base_length_ + length_per_level_ * (level_ - 1);
         std::uniform_int_distribution<int> dis(0, num_blocks_ - 1);
@@ -259,7 +268,36 @@ private:
             ROS_INFO("  [%zu] Block %d", i, sequence_[i]);
         }
 
-        showNextBlock();
+        sendSequenceBatchToMotion();
+    }
+
+    void sendSequenceBatchToMotion() {
+        waiting_for_motion_ = true;
+        motion_started_for_sequence_ = false;
+
+        for (size_t i = 0; i < sequence_.size(); ++i) {
+            const int block_id = sequence_[i];
+            memory_game::Block target = makeTargetBlock(block_id);
+            target_pub_.publish(target);
+            ROS_INFO("Queued block %d (%zu/%zu)", block_id, i + 1, sequence_.size());
+        }
+
+        if (!have_motion_state_) {
+            ROS_WARN("No motion status detected. Proceeding to player input.");
+            waiting_for_motion_ = false;
+            current_state_ = GameState::WAITING_PLAYER;
+            publishState("WAITING_PLAYER");
+            resetPlayerTimeout();
+            return;
+        }
+
+        const double per_target_budget_sec = std::max(2.0, show_hold_sec_ + between_show_sec_ + 1.5);
+        const double timeout_sec = std::max(5.0, per_target_budget_sec * sequence_.size() + 2.0);
+        show_failsafe_timer_ = nh_.createTimer(
+            ros::Duration(timeout_sec),
+            &GameNode::showFailsafeCallback,
+            this,
+            true);
     }
 
     void showNextBlock() {
@@ -296,7 +334,7 @@ private:
                 true);
         } else {
             show_failsafe_timer_ = nh_.createTimer(
-                ros::Duration(show_hold_sec_ + 2.0),
+                ros::Duration(std::max(3.0, show_hold_sec_ + between_show_sec_ + 2.0)),
                 &GameNode::showFailsafeCallback,
                 this,
                 true);
