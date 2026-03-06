@@ -1,26 +1,4 @@
 <?xml version="1.0"?>
 <launch>
-    <!-- Launch real Panda robot and camera drivers -->
-    
-    <arg name="robot_ip" default="10.60.41.71"/>
-    <arg name="load_gripper" default="true"/>
-    
-    <!-- Franka Panda Robot Control -->
-    <include file="$(find franka_control)/launch/franka_control.launch">
-        <arg name="robot_ip" value="$(arg robot_ip)"/>
-        <arg name="load_gripper" value="$(arg load_gripper)"/>
-    </include>
-    
-    <!-- RealSense Camera -->
-    <include file="$(find realsense2_camera)/launch/rs_camera.launch">
-        <arg name="align_depth.enable" value="true"/>
-    </include>
-    
-    <!-- Alternative: If using different camera -->
-    <!--
-    <node name="camera_driver" pkg="your_camera_pkg" type="camera_node">
-        <param name="device_id" value="0"/>
-    </node>
-    -->
-    
+  <include file="$(find cu_panda_bringup)/launch/hardware.launch" />  
 </launch>
