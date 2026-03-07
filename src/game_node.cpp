@@ -115,7 +115,12 @@ private:
         pnh_.param("show_hold_sec", show_hold_sec_, 1.0);
         pnh_.param("between_show_sec", between_show_sec_, 0.3);
         pnh_.param("round_pause_sec", round_pause_sec_, 1.0);
-        pnh_.param("player_timeout_sec", player_timeout_sec_, 12.0);
+        // Support both names: player_timeout_sec (new) and player_timeout (legacy/config file).
+        if (!pnh_.getParam("player_timeout_sec", player_timeout_sec_)) {
+            if (!pnh_.getParam("player_timeout", player_timeout_sec_)) {
+                player_timeout_sec_ = 12.0;
+            }
+        }
         pnh_.param("start_delay_sec", start_delay_sec_, 0.8);
         pnh_.param("no_immediate_repeat", no_immediate_repeat_, true);
         pnh_.param("target_frame", target_frame_, std::string("panda_link0"));
@@ -134,7 +139,10 @@ private:
         base_length_ = std::max(1, base_length_);
         length_per_level_ = std::max(0, length_per_level_);
         show_hold_sec_ = std::max(0.1, show_hold_sec_);
-        player_timeout_sec_ = std::max(1.0, player_timeout_sec_);
+        // <= 0 means disabled timeout (useful while debugging vision/player input).
+        if (player_timeout_sec_ < 0.0) {
+            player_timeout_sec_ = 0.0;
+        }
     }
 
     void blocksCallback(const memory_game::BlockArray::ConstPtr& msg) {
@@ -396,6 +404,10 @@ private:
 
     void resetPlayerTimeout() {
         player_timeout_timer_.stop();
+        if (player_timeout_sec_ <= 0.0) {
+            ROS_INFO_THROTTLE(2.0, "Player timeout disabled (player_timeout_sec <= 0)");
+            return;
+        }
         player_timeout_timer_ = nh_.createTimer(
             ros::Duration(player_timeout_sec_),
             &GameNode::playerTimeoutCallback,

@@ -2,6 +2,8 @@
 <launch>
     <!-- Arguments -->
     <arg name="use_rviz" default="true"/>
+    <arg name="use_real_robot" default="false"/>
+    <arg name="enable_debug_images" default="false"/>
     
     <!-- Game parameters -->
     <rosparam file="$(find memory_game)/config/game_params.yaml" command="load"/>
@@ -12,6 +14,7 @@
         <param name="depth_topic" value="/camera/aligned_depth_to_color/image_raw"/>
         <param name="camera_info_topic" value="/camera/color/camera_info"/>
         <param name="target_frame" value="panda_link0"/>
+        <param name="enable_debug_images" value="$(arg enable_debug_images)"/>
     </node>
     
     <!-- Game Logic Node -->
@@ -23,11 +26,10 @@
     </node>
     
     <!-- RViz (optional) -->
-   <!-- <node if="$(arg use_rviz)" name="rviz" pkg="rviz" type="rviz" 
-          args="-d $(find memory_game)/config/rviz_config.rviz" output="screen"/> -->
-    
-    <!-- Real Robot include (enable when running on hardware) -->
-    <!-- <include file="$(find memory_game)/launch/real_robot.launch"/> -->
-    <include file="$(find memory_game)/launch/test_rviz.launch"/>
+    <node if="$(arg use_rviz)" name="rviz" pkg="rviz" type="rviz"
+          args="-d $(find memory_game)/config/rviz_config.rviz" output="screen"/>
+
+    <!-- Real robot bringup (optional, for lab/hardware use) -->
+    <include if="$(arg use_real_robot)" file="$(find memory_game)/launch/real_robot.launch"/>
 
 </launch>

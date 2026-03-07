@@ -1,22 +1,20 @@
 # Game parameters configuration
 
 game_node:
-  # Initial sequence length
-  initial_sequence_length: 3
-  
-  # Points per correct sequence
-  points_per_level: 10
-  
-  # Maximum level
-  max_level: 10
-  
-  # Timeout for player input (seconds)
-  player_timeout: 30.0
-  
-  # Block detection parameters
-  block_detection:
-    min_confidence: 0.7
-    detection_rate: 10.0  # Hz
+  # These names match src/game_node.cpp (private params under /game_node/*)
+  num_blocks: 4
+  base_length: 3
+  length_per_level: 1
+  show_hold_sec: 1.0
+  between_show_sec: 0.3
+  round_pause_sec: 1.0
+  player_timeout_sec: 30.0
+  start_delay_sec: 0.8
+  no_immediate_repeat: true
+  target_frame: "panda_link0"
+  default_x: 0.40
+  default_y: 0.00
+  default_z: 0.05
     
 vision_node:
   # Camera topics
@@ -24,6 +22,7 @@ vision_node:
   depth_topic: "/camera/aligned_depth_to_color/image_raw"
   camera_info_topic: "/camera/color/camera_info"
   target_frame: "panda_link0"
+  markers_topic: "/vision/visualization_marker_array"
   
   # Contour filtering and mask cleanup
   min_block_area: 300       # pixels
@@ -46,8 +45,9 @@ vision_node:
   enable_player_detection: true
   max_select_distance_m: 0.12   # hand within this distance of block (meters)
   selection_cooldown_sec: 1.0   # min time between selections
+  selection_hold_sec: 3.0       # hand must stay on same block this long before selection
   min_hand_area: 500            # min skin blob area (pixels)
-  min_selection_stable_frames: 3
+  max_hand_area: 200000         # max skin blob area (pixels)
   require_hand_release: true
 
   # HSV ranges format: [hmin, hmax, smin, smax, vmin, vmax]

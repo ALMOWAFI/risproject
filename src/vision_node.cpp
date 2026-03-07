@@ -105,7 +105,7 @@ public:
         loadParams();
 
         blocks_pub_ = nh_.advertise<memory_game::BlockArray>("/detected_blocks", 10);
-        markers_pub_ = nh_.advertise<visualization_msgs::MarkerArray>("/visualization_marker_array", 10);
+        markers_pub_ = nh_.advertise<visualization_msgs::MarkerArray>(markers_topic_, 10);
         selection_pub_ = nh_.advertise<memory_game::PlayerSelection>("/player_selection", 10);
 
         if (enable_debug_images_) {
@@ -122,6 +122,7 @@ public:
         ROS_INFO("depth_topic=%s", depth_topic_.c_str());
         ROS_INFO("camera_info_topic=%s", camera_info_topic_.c_str());
         ROS_INFO("target_frame=%s", target_frame_.c_str());
+        ROS_INFO("markers_topic=%s", markers_topic_.c_str());
     }
 
 private:
@@ -130,6 +131,7 @@ private:
         pnh_.param("depth_topic", depth_topic_, std::string("/camera/aligned_depth_to_color/image_raw"));
         pnh_.param("camera_info_topic", camera_info_topic_, std::string("/camera/color/camera_info"));
         pnh_.param("target_frame", target_frame_, std::string("panda_link0"));
+        pnh_.param("markers_topic", markers_topic_, std::string("/vision/visualization_marker_array"));
 
         pnh_.param("min_block_area", min_block_area_, 300.0);
         pnh_.param("max_block_area", max_block_area_, 60000.0);
@@ -149,7 +151,8 @@ private:
         pnh_.param("max_select_distance_m", max_select_distance_m_, 0.12);
         pnh_.param("selection_cooldown_sec", selection_cooldown_sec_, 1.0);
         pnh_.param("min_hand_area", min_hand_area_, 500.0);
-        pnh_.param("min_selection_stable_frames", min_selection_stable_frames_, 3);
+        pnh_.param("max_hand_area", max_hand_area_, 200000.0);
+        pnh_.param("selection_hold_sec", selection_hold_sec_, 3.0);
         pnh_.param("require_hand_release", require_hand_release_, true);
 
         if (mask_open_iterations_ < 0) mask_open_iterations_ = 0;
@@ -159,7 +162,8 @@ private:
         max_select_distance_m_ = std::max(0.01, max_select_distance_m_);
         selection_cooldown_sec_ = std::max(0.0, selection_cooldown_sec_);
         min_hand_area_ = std::max(50.0, min_hand_area_);
-        min_selection_stable_frames_ = std::max(1, min_selection_stable_frames_);
+        max_hand_area_ = std::max(min_hand_area_, max_hand_area_);
+        selection_hold_sec_ = std::max(0.0, selection_hold_sec_);
 
         initDefaultColors();
         loadHsvRangesFromParams();
@@ -283,7 +287,7 @@ private:
             return;
         }
 
-        if ((msg->header.stamp - latest_depth_stamp_).toSec() > max_depth_age_sec_) {
+        if (std::fabs((msg->header.stamp - latest_depth_stamp_).toSec()) > max_depth_age_sec_) {
             ROS_WARN_THROTTLE(2.0, "Depth too old compared to RGB frame");
             return;
         }
@@ -365,7 +369,7 @@ private:
 
         if (enable_player_detection_ && !blocks.empty()) {
             geometry_msgs::Point hand_base;
-            if (detectHandInBase(msg->header, cv_ptr->image, hsv, hand_base)) {
+            if (detectHandInBase(msg->header, hsv, hand_base)) {
                 tryPublishPlayerSelection(blocks, hand_base, msg->header);
             } else {
                 resetSelectionTrackingForNoHand();
@@ -382,7 +386,6 @@ private:
     }
 
     bool detectHandInBase(const std_msgs::Header& header,
-                          const cv::Mat& bgr,
                           const cv::Mat& hsv,
                           geometry_msgs::Point& hand_base) {
         cv::Mat skin_mask;
@@ -398,7 +401,7 @@ private:
         double best_area = 0.0;
         for (size_t i = 0; i < contours.size(); ++i) {
             const double area = cv::contourArea(contours[i]);
-            if (area < min_hand_area_ || area > max_block_area_) {
+            if (area < min_hand_area_ || area > max_hand_area_) {
                 continue;
             }
             if (area > best_area) {
@@ -448,18 +451,16 @@ private:
 
         if (best_id < 0 || best_dist > max_select_distance_m_) {
             stable_candidate_id_ = -1;
-            stable_candidate_count_ = 0;
+            stable_candidate_since_ = ros::Time(0);
             return;
         }
 
         if (best_id != stable_candidate_id_) {
             stable_candidate_id_ = best_id;
-            stable_candidate_count_ = 1;
-        } else {
-            ++stable_candidate_count_;
+            stable_candidate_since_ = now;
         }
 
-        if (stable_candidate_count_ < min_selection_stable_frames_) {
+        if ((now - stable_candidate_since_).toSec() < selection_hold_sec_) {
             return;
         }
 
@@ -484,7 +485,7 @@ private:
         last_selection_time_ = now;
         last_selected_block_id_ = best_id;
         stable_candidate_id_ = -1;
-        stable_candidate_count_ = 0;
+        stable_candidate_since_ = ros::Time(0);
         if (require_hand_release_) {
             selection_armed_ = false;
         }
@@ -493,7 +494,7 @@ private:
 
     void resetSelectionTrackingForNoHand() {
         stable_candidate_id_ = -1;
-        stable_candidate_count_ = 0;
+        stable_candidate_since_ = ros::Time(0);
         if (require_hand_release_) {
             selection_armed_ = true;
         }
@@ -726,6 +727,7 @@ private:
     std::string depth_topic_;
     std::string camera_info_topic_;
     std::string target_frame_;
+    std::string markers_topic_;
 
     double min_block_area_;
     double max_block_area_;
@@ -744,13 +746,14 @@ private:
     bool enable_player_detection_;
     double max_select_distance_m_;
     double selection_cooldown_sec_;
+    double selection_hold_sec_;
     double min_hand_area_;
-    int min_selection_stable_frames_;
+    double max_hand_area_;
     bool require_hand_release_;
     ros::Time last_selection_time_;
     int last_selected_block_id_;
     int stable_candidate_id_ = -1;
-    int stable_candidate_count_ = 0;
+    ros::Time stable_candidate_since_;
     bool selection_armed_ = true;
 
     std::vector<ColorConfig> color_configs_;

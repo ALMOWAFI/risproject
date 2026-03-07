@@ -5,6 +5,7 @@
 #include <geometry_msgs/Point.h>
 #include <cmath>
 #include <deque>
+#include <string>
 
 // ---------------- STATE MACHINE ----------------
 enum MotionState {
@@ -19,6 +20,7 @@ MotionState current_state = IDLE;
 // ---------------- GLOBALS ----------------
 ros::Publisher marker_pub;
 ros::Publisher status_pub;
+std::string marker_frame = "panda_link0";
 
 geometry_msgs::Point current_pos;
 geometry_msgs::Point target_pos;
@@ -98,7 +100,7 @@ void publishMarker()
     visualization_msgs::MarkerArray array;
     visualization_msgs::Marker marker;
 
-    marker.header.frame_id = "world";
+    marker.header.frame_id = marker_frame;
     marker.header.stamp = ros::Time::now();
     marker.ns = "motion";
     marker.id = 0;
@@ -165,6 +167,9 @@ int main(int argc, char** argv)
 {
     ros::init(argc, argv, "motion_node");
     ros::NodeHandle nh;
+    ros::NodeHandle pnh("~");
+
+    pnh.param("marker_frame", marker_frame, std::string("panda_link0"));
 
     marker_pub = nh.advertise<visualization_msgs::MarkerArray>("/visualization_marker_array", 10);
     status_pub = nh.advertise<std_msgs::String>("/motion_status", 10);
