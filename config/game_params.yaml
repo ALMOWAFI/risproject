@@ -23,9 +23,9 @@ game_node:
     
 vision_node:
   # Camera topics
-  color_topic: "/camera/color/image_raw"
-  depth_topic: "/camera/aligned_depth_to_color/image_raw"
-  camera_info_topic: "/camera/color/camera_info"
+  color_topic: "/realsense/color/image_raw"
+  depth_topic: "/realsense/aligned_depth_to_color/image_raw"
+  camera_info_topic: "/realsense/color/camera_info"
   target_frame: "panda_link0"
   markers_topic: "/vision/visualization_marker_array"
   

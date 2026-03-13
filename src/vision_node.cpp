@@ -127,9 +127,9 @@ public:
 
 private:
     void loadParams() {
-        pnh_.param("color_topic", color_topic_, std::string("/camera/color/image_raw"));
-        pnh_.param("depth_topic", depth_topic_, std::string("/camera/aligned_depth_to_color/image_raw"));
-        pnh_.param("camera_info_topic", camera_info_topic_, std::string("/camera/color/camera_info"));
+        pnh_.param("color_topic", color_topic_, std::string("/realsense/color/image_raw"));
+        pnh_.param("depth_topic", depth_topic_, std::string("/realsense/aligned_depth_to_color/image_raw"));
+        pnh_.param("camera_info_topic", camera_info_topic_, std::string("/realsense/color/camera_info"));
         pnh_.param("target_frame", target_frame_, std::string("panda_link0"));
         pnh_.param("markers_topic", markers_topic_, std::string("/vision/visualization_marker_array"));
 
