@@ -15,6 +15,8 @@ game_node:
   default_x: 0.40
   default_y: 0.00
   default_z: 0.05
+  require_detected_blocks: false
+  blocks_wait_sec: 0.5
     
 vision_node:
   # Camera topics

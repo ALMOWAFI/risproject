@@ -73,12 +73,16 @@ add_executable(motion_node src/motion_node.cpp)
 target_link_libraries(motion_node ${catkin_LIBRARIES})
 add_dependencies(motion_node ${${PROJECT_NAME}_EXPORTED_TARGETS} ${catkin_EXPORTED_TARGETS})
 
+add_executable(motion_hw_node src/motion_hw_node.cpp)
+target_link_libraries(motion_hw_node ${catkin_LIBRARIES})
+add_dependencies(motion_hw_node ${${PROJECT_NAME}_EXPORTED_TARGETS} ${catkin_EXPORTED_TARGETS})
+
 #############
 ## Install ##
 #############
 
 ## Mark executables and/or libraries for installation
-install(TARGETS vision_node game_node motion_node
+install(TARGETS vision_node game_node motion_node motion_hw_node
   ARCHIVE DESTINATION ${CATKIN_PACKAGE_LIB_DESTINATION}
   LIBRARY DESTINATION ${CATKIN_PACKAGE_LIB_DESTINATION}
   RUNTIME DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}

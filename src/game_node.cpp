@@ -69,6 +69,8 @@ private:
     double player_timeout_sec_;
     double start_delay_sec_;
     bool no_immediate_repeat_;
+    bool require_detected_blocks_;
+    double blocks_wait_sec_;
 
     geometry_msgs::Point default_target_;
     std::string target_frame_;
@@ -124,6 +126,8 @@ private:
         pnh_.param("start_delay_sec", start_delay_sec_, 0.8);
         pnh_.param("no_immediate_repeat", no_immediate_repeat_, true);
         pnh_.param("target_frame", target_frame_, std::string("panda_link0"));
+        pnh_.param("require_detected_blocks", require_detected_blocks_, false);
+        pnh_.param("blocks_wait_sec", blocks_wait_sec_, 0.5);
 
         pnh_.param("default_x", default_target_.x, 0.40);
         pnh_.param("default_y", default_target_.y, 0.00);
@@ -143,6 +147,19 @@ private:
         if (player_timeout_sec_ < 0.0) {
             player_timeout_sec_ = 0.0;
         }
+        blocks_wait_sec_ = std::max(0.05, blocks_wait_sec_);
+    }
+
+    bool haveAllBlocks() const {
+        if (known_blocks_.size() < static_cast<size_t>(num_blocks_)) {
+            return false;
+        }
+        for (int id = 0; id < num_blocks_; ++id) {
+            if (known_blocks_.find(id) == known_blocks_.end()) {
+                return false;
+            }
+        }
+        return true;
     }
 
     void blocksCallback(const memory_game::BlockArray::ConstPtr& msg) {
@@ -238,6 +255,20 @@ private:
     }
 
     void startGame() {
+        // On real hardware, don't start showing a sequence until we have block poses from vision.
+        // This avoids motion being driven by the default/fallback target.
+        if (require_detected_blocks_ && !haveAllBlocks()) {
+            publishState("WAITING_FOR_BLOCKS");
+            ROS_WARN_THROTTLE(2.0, "Waiting for /detected_blocks (%zu/%d blocks cached)",
+                              known_blocks_.size(), num_blocks_);
+            start_timer_ = nh_.createTimer(
+                ros::Duration(blocks_wait_sec_),
+                &GameNode::startTimerCallback,
+                this,
+                true);
+            return;
+        }
+
         ROS_INFO("Starting new game");
         score_ = 0;
         level_ = 1;
