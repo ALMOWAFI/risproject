@@ -73,9 +73,25 @@ add_executable(motion_node src/motion_node.cpp)
 target_link_libraries(motion_node ${catkin_LIBRARIES})
 add_dependencies(motion_node ${${PROJECT_NAME}_EXPORTED_TARGETS} ${catkin_EXPORTED_TARGETS})
 
-add_executable(motion_hw_node newmotion/motion_hw_node.cpp)
+ add_executable(motion_hw_node newmotion/motion_hw_node.cpp)
 target_link_libraries(motion_hw_node ${catkin_LIBRARIES})
 add_dependencies(motion_hw_node ${${PROJECT_NAME}_EXPORTED_TARGETS} ${catkin_EXPORTED_TARGETS})
+
+# Optional: build MoveIt-backed motion bridge if MoveIt is installed.
+find_package(moveit_ros_planning_interface QUIET)
+if(moveit_ros_planning_interface_FOUND)
+  add_executable(motion_moveit_node newmotion/motion_moveit_node.cpp)
+  target_link_libraries(motion_moveit_node ${catkin_LIBRARIES} ${moveit_ros_planning_interface_LIBRARIES})
+  target_include_directories(motion_moveit_node PRIVATE ${moveit_ros_planning_interface_INCLUDE_DIRS})
+  add_dependencies(motion_moveit_node ${${PROJECT_NAME}_EXPORTED_TARGETS} ${catkin_EXPORTED_TARGETS})
+  install(TARGETS motion_moveit_node
+    ARCHIVE DESTINATION ${CATKIN_PACKAGE_LIB_DESTINATION}
+    LIBRARY DESTINATION ${CATKIN_PACKAGE_LIB_DESTINATION}
+    RUNTIME DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
+  )
+else()
+  message(STATUS "MoveIt not found: skipping motion_moveit_node build")
+endif()
 
 #############
 ## Install ##

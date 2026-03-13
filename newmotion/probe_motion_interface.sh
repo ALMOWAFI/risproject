@@ -41,6 +41,13 @@ print_info "/command"
 print_info "/command_pose"
 print_info "/target_pose"
 
+print_info "/position_joint_trajectory_controller/command"
+print_info "/position_joint_trajectory_controller/state"
+print_info "/position_joint_trajectory_controller/follow_joint_trajectory/goal"
+print_info "/position_joint_trajectory_controller/follow_joint_trajectory/status"
+print_info "/position_joint_trajectory_controller/follow_joint_trajectory/feedback"
+print_info "/position_joint_trajectory_controller/follow_joint_trajectory/result"
+
 say ""
 say "== Controller/MoveIt Signals (nodes/services) =="
 if command -v rosnode >/dev/null 2>&1; then
@@ -59,8 +66,8 @@ fi
 
 say ""
 say "== Camera/TF Quick Check (optional) =="
-if echo "$topics" | grep -qx "/camera/color/camera_info"; then
-  cam_frame="$(rostopic echo -n1 /camera/color/camera_info/header/frame_id 2>/dev/null | tr -d '\"' | tr -d '\r' | tail -n1 || true)"
+if echo "" | grep -qx "/realsense/color/camera_info"; then
+  cam_frame="$(rostopic echo -n1 /realsense/color/camera_info/header/frame_id 2>/dev/null | tr -d '\"' | tr -d '\r' | tail -n1 || true)"
   if [ -n "$cam_frame" ]; then
     say "camera_info frame_id: $cam_frame"
     if command -v timeout >/dev/null 2>&1; then
@@ -75,5 +82,5 @@ fi
 say ""
 say "Next step:"
 say "- Pick a command topic that has Subscribers > 0 and note its Type."
-say "- If you have a PoseStamped command topic, we can publish the block pose to it."
+say "- If you have a PoseStamped command topic, we can publish the block pose to it. If not, we will use MoveIt/FollowJointTrajectory."
 
