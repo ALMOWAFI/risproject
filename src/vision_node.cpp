@@ -133,6 +133,22 @@ private:
         pnh_.param("target_frame", target_frame_, std::string("panda_link0"));
         pnh_.param("markers_topic", markers_topic_, std::string("/vision/visualization_marker_array"));
 
+        // Optional ROI to ignore background (pixel coordinates in the color image).
+        pnh_.param("roi_enable", roi_enable_, false);
+        pnh_.param("roi_x", roi_x_, 0);
+        pnh_.param("roi_y", roi_y_, 0);
+        pnh_.param("roi_w", roi_w_, 0);
+        pnh_.param("roi_h", roi_h_, 0);
+
+        // Optional 3D workspace bounds in target_frame to reject background blobs.
+        pnh_.param("workspace_enable", workspace_enable_, false);
+        pnh_.param("workspace_min_x", workspace_min_x_, -10.0);
+        pnh_.param("workspace_max_x", workspace_max_x_, 10.0);
+        pnh_.param("workspace_min_y", workspace_min_y_, -10.0);
+        pnh_.param("workspace_max_y", workspace_max_y_, 10.0);
+        pnh_.param("workspace_min_z", workspace_min_z_, -10.0);
+        pnh_.param("workspace_max_z", workspace_max_z_, 10.0);
+
         pnh_.param("min_block_area", min_block_area_, 300.0);
         pnh_.param("max_block_area", max_block_area_, 60000.0);
         pnh_.param("mask_open_iterations", mask_open_iterations_, 1);
@@ -164,6 +180,12 @@ private:
         min_hand_area_ = std::max(50.0, min_hand_area_);
         max_hand_area_ = std::max(min_hand_area_, max_hand_area_);
         selection_hold_sec_ = std::max(0.0, selection_hold_sec_);
+
+
+        roi_x_ = std::max(0, roi_x_);
+        roi_y_ = std::max(0, roi_y_);
+        roi_w_ = std::max(0, roi_w_);
+        roi_h_ = std::max(0, roi_h_);
 
         initDefaultColors();
         loadHsvRangesFromParams();
@@ -309,6 +331,13 @@ private:
         cv::Mat debug_mask_accum = cv::Mat::zeros(hsv.size(), CV_8UC1);
         cv::Mat debug_overlay = cv_ptr->image.clone();
 
+        if (enable_debug_images_) {
+            cv::Rect roi;
+            if (computeRoiRect(hsv.size(), roi)) {
+                cv::rectangle(debug_overlay, roi, cv::Scalar(255, 255, 255), 2);
+            }
+        }
+
         for (const ColorConfig& cfg : color_configs_) {
             // Per-color 2D detection in image space.
             const DetectionResult det = detectColorBlob(hsv, cfg);
@@ -328,6 +357,12 @@ private:
             // Transform camera-frame point into robot base frame for downstream nodes.
             geometry_msgs::Point p_base;
             if (!projectAndTransformToBase(det.u, det.v, depth_m, msg->header, p_base)) {
+                continue;
+            }
+
+            // EMA helps reduce jitter in published block coordinates.
+
+            if (workspace_enable_ && !withinWorkspace(p_base)) {
                 continue;
             }
 
@@ -500,6 +535,35 @@ private:
         }
     }
 
+
+    bool computeRoiRect(const cv::Size& size, cv::Rect& roi) const {
+        if (!roi_enable_ || roi_w_ <= 0 || roi_h_ <= 0) {
+            return false;
+        }
+
+        cv::Rect requested(roi_x_, roi_y_, roi_w_, roi_h_);
+        cv::Rect bounds(0, 0, size.width, size.height);
+        roi = requested & bounds;
+        return roi.width > 0 && roi.height > 0;
+    }
+
+    void applyRoiMask(cv::Mat& mask) const {
+        cv::Rect roi;
+        if (!computeRoiRect(mask.size(), roi)) {
+            return;
+        }
+
+        cv::Mat out = cv::Mat::zeros(mask.size(), mask.type());
+        mask(roi).copyTo(out(roi));
+        mask = out;
+    }
+
+    bool withinWorkspace(const geometry_msgs::Point& p) const {
+        return p.x >= workspace_min_x_ && p.x <= workspace_max_x_ &&
+               p.y >= workspace_min_y_ && p.y <= workspace_max_y_ &&
+               p.z >= workspace_min_z_ && p.z <= workspace_max_z_;
+    }
+
     DetectionResult detectColorBlob(const cv::Mat& hsv, const ColorConfig& cfg) const {
         DetectionResult out;
         cv::Mat mask = cv::Mat::zeros(hsv.size(), CV_8UC1);
@@ -519,6 +583,10 @@ private:
         if (mask_close_iterations_ > 0) {
             cv::morphologyEx(mask, mask, cv::MORPH_CLOSE, cv::Mat(), cv::Point(-1, -1), mask_close_iterations_);
         }
+
+        // Keep only the largest contour in valid area bounds for this color.
+
+        applyRoiMask(mask);
 
         // Keep only the largest contour in valid area bounds for this color.
         std::vector<std::vector<cv::Point> > contours;
@@ -728,6 +796,21 @@ private:
     std::string camera_info_topic_;
     std::string target_frame_;
     std::string markers_topic_;
+
+
+    bool roi_enable_ = false;
+    int roi_x_ = 0;
+    int roi_y_ = 0;
+    int roi_w_ = 0;
+    int roi_h_ = 0;
+
+    bool workspace_enable_ = false;
+    double workspace_min_x_ = -10.0;
+    double workspace_max_x_ = 10.0;
+    double workspace_min_y_ = -10.0;
+    double workspace_max_y_ = 10.0;
+    double workspace_min_z_ = -10.0;
+    double workspace_max_z_ = 10.0;
 
     double min_block_area_;
     double max_block_area_;

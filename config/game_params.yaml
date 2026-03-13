@@ -28,6 +28,23 @@ vision_node:
   camera_info_topic: "/realsense/color/camera_info"
   target_frame: "panda_link0"
   markers_topic: "/vision/visualization_marker_array"
+
+
+  # Optional ROI filter (pixel coords in the color image). Use this to ignore background.
+  roi_enable: false
+  roi_x: 0
+  roi_y: 0
+  roi_w: 0
+  roi_h: 0
+
+  # Optional 3D workspace filter in target_frame (meters).
+  workspace_enable: false
+  workspace_min_x: -10.0
+  workspace_max_x: 10.0
+  workspace_min_y: -10.0
+  workspace_max_y: 10.0
+  workspace_min_z: -10.0
+  workspace_max_z: 10.0
   
   # Contour filtering and mask cleanup
   min_block_area: 300       # pixels
