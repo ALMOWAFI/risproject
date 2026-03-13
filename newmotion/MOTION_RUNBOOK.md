@@ -13,7 +13,7 @@ This depends on your lab. Typical:
 From any terminal with ROS sourced:
 
 ```bash
-bash launch/newmotion/probe_motion_interface.sh
+bash newmotion/probe_motion_interface.sh
 ```
 
 You are looking for a topic that:

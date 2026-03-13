@@ -73,7 +73,7 @@ add_executable(motion_node src/motion_node.cpp)
 target_link_libraries(motion_node ${catkin_LIBRARIES})
 add_dependencies(motion_node ${${PROJECT_NAME}_EXPORTED_TARGETS} ${catkin_EXPORTED_TARGETS})
 
-add_executable(motion_hw_node src/motion_hw_node.cpp)
+add_executable(motion_hw_node newmotion/motion_hw_node.cpp)
 target_link_libraries(motion_hw_node ${catkin_LIBRARIES})
 add_dependencies(motion_hw_node ${${PROJECT_NAME}_EXPORTED_TARGETS} ${catkin_EXPORTED_TARGETS})
 
