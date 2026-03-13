@@ -40,6 +40,7 @@ private:
     ros::Timer show_failsafe_timer_;
     ros::Timer round_timer_;
     ros::Timer player_timeout_timer_;
+    ros::Timer target_sub_wait_timer_;
 
     GameState current_state_;
 
@@ -71,9 +72,16 @@ private:
     bool no_immediate_repeat_;
     bool require_detected_blocks_;
     double blocks_wait_sec_;
+    // When using batch-publish mode, publishing /target_block before motion starts can drop messages.
+    // This makes the "show sequence" incomplete with no obvious error, so we wait for a subscriber.
+    double target_subscriber_poll_sec_;
+    double target_subscriber_timeout_sec_;
 
     geometry_msgs::Point default_target_;
     std::string target_frame_;
+    // Guard against publishing the same sequence multiple times while we wait for subscribers.
+    bool sequence_sent_to_motion_;
+    ros::Time target_sub_wait_start_;
 
 public:
     GameNode()
@@ -86,7 +94,8 @@ public:
           waiting_for_motion_(false),
           motion_started_for_sequence_(false),
           have_motion_state_(false),
-          gen_(std::random_device{}()) {
+          gen_(std::random_device{}()),
+          sequence_sent_to_motion_(false) {
         loadParams();
 
         blocks_sub_ = nh_.subscribe("/detected_blocks", 10, &GameNode::blocksCallback, this);
@@ -128,6 +137,8 @@ private:
         pnh_.param("target_frame", target_frame_, std::string("panda_link0"));
         pnh_.param("require_detected_blocks", require_detected_blocks_, false);
         pnh_.param("blocks_wait_sec", blocks_wait_sec_, 0.5);
+        pnh_.param("target_subscriber_poll_sec", target_subscriber_poll_sec_, 0.2);
+        pnh_.param("target_subscriber_timeout_sec", target_subscriber_timeout_sec_, 5.0);
 
         pnh_.param("default_x", default_target_.x, 0.40);
         pnh_.param("default_y", default_target_.y, 0.00);
@@ -148,6 +159,8 @@ private:
             player_timeout_sec_ = 0.0;
         }
         blocks_wait_sec_ = std::max(0.05, blocks_wait_sec_);
+        target_subscriber_poll_sec_ = std::max(0.05, target_subscriber_poll_sec_);
+        target_subscriber_timeout_sec_ = std::max(0.0, target_subscriber_timeout_sec_);
     }
 
     bool haveAllBlocks() const {
@@ -245,6 +258,11 @@ private:
         generateAndStartSequence();
     }
 
+    void targetSubWaitCallback(const ros::TimerEvent&) {
+        // Retry sending the sequence once motion is subscribed to /target_block.
+        sendSequenceBatchToMotion();
+    }
+
     void playerTimeoutCallback(const ros::TimerEvent&) {
         if (current_state_ != GameState::WAITING_PLAYER) {
             return;
@@ -283,6 +301,9 @@ private:
         player_index_ = 0;
         waiting_for_motion_ = false;
         motion_started_for_sequence_ = false;
+        sequence_sent_to_motion_ = false;
+        target_sub_wait_start_ = ros::Time(0);
+        target_sub_wait_timer_.stop();
 
         int sequence_length = base_length_ + length_per_level_ * (level_ - 1);
         std::uniform_int_distribution<int> dis(0, num_blocks_ - 1);
@@ -311,8 +332,44 @@ private:
     }
 
     void sendSequenceBatchToMotion() {
+        if (sequence_sent_to_motion_) {
+            return;
+        }
+
+        if (target_pub_.getNumSubscribers() == 0) {
+            // Ensure motion is actually listening before we send the sequence.
+            // In ROS topics, early publishes can be dropped if the subscriber connects later.
+            const ros::Time now = ros::Time::now();
+            if (target_sub_wait_start_.isZero()) {
+                target_sub_wait_start_ = now;
+            }
+
+            const double waited_sec = (now - target_sub_wait_start_).toSec();
+            if (waited_sec > target_subscriber_timeout_sec_) {
+                ROS_WARN("No /target_block subscribers after %.1fs. Proceeding to player input.", waited_sec);
+                sequence_sent_to_motion_ = true;
+                waiting_for_motion_ = false;
+                motion_started_for_sequence_ = false;
+                current_state_ = GameState::WAITING_PLAYER;
+                publishState("WAITING_PLAYER");
+                resetPlayerTimeout();
+                return;
+            }
+
+            ROS_WARN_THROTTLE(2.0, "Waiting for /target_block subscriber (%.1fs/%.1fs)",
+                              waited_sec, target_subscriber_timeout_sec_);
+            publishState("WAITING_FOR_MOTION");
+            target_sub_wait_timer_ = nh_.createTimer(
+                ros::Duration(target_subscriber_poll_sec_),
+                &GameNode::targetSubWaitCallback,
+                this,
+                true);
+            return;
+        }
+
         waiting_for_motion_ = true;
         motion_started_for_sequence_ = false;
+        sequence_sent_to_motion_ = true;
 
         for (size_t i = 0; i < sequence_.size(); ++i) {
             const int block_id = sequence_[i];
@@ -431,6 +488,7 @@ private:
         show_timer_.stop();
         show_failsafe_timer_.stop();
         round_timer_.stop();
+        target_sub_wait_timer_.stop();
     }
 
     void resetPlayerTimeout() {

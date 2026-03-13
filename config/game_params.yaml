@@ -17,6 +17,9 @@ game_node:
   default_z: 0.05
   require_detected_blocks: false
   blocks_wait_sec: 0.5
+  # Batch publishing /target_block can be dropped if motion isn't subscribed yet.
+  target_subscriber_poll_sec: 0.2
+  target_subscriber_timeout_sec: 5.0
     
 vision_node:
   # Camera topics
