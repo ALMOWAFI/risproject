@@ -137,6 +137,27 @@ Treat `test_rviz.launch` as a debug/demo tool, not the real robot architecture.
 - `newmotion/MOTION_RUNBOOK.md` - real-robot motion integration notes
 - `TASK_BREAKDOWN.md` - historical planning document, not the current source of truth
 
+## Integration Lessons
+
+These are the main issues we actually hit while integrating in the lab:
+
+- Vision initially subscribed to the wrong camera topics.
+  - The working defaults were changed to the RealSense topics under `/realsense/...`.
+- Vision could detect background objects as blocks.
+  - ROI and workspace filtering were added to reduce false detections.
+- Skin tones could overlap with the red block mask.
+  - The skin mask is now removed from block masks before color detection.
+- `player_selection` could keep reporting red even when the user pointed elsewhere.
+  - This turned out to be downstream of bad block detection, especially false red detection from the hand.
+- The game node used to keep stale block positions for too long.
+  - It now treats detections more carefully and checks freshness instead of trusting old data forever.
+- The game node used to fall back to fake default targets.
+  - That was unsafe for real motion, so required detections are now enforced.
+- The lab Panda stack did not expose the simple motion interface we first assumed.
+  - The real robot path became `motion_moveit_node` after probing the available interfaces.
+- The original plan and some old docs did not match the final architecture.
+  - The repo now keeps the plan as historical context, not as the current source of truth.
+
 ## Troubleshooting
 
 - Package not found:

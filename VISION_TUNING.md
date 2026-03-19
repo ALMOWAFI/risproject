@@ -106,6 +106,16 @@ Pipeline is field-ready when all checks pass:
 - Jitter is low enough for reliable block selection.
 - `/detected_blocks` publishes at a stable rate.
 
+## Known Project-Specific Failure Patterns
+
+These were not hypothetical; they happened during integration:
+
+- Wrong camera topics: node runs, but `/detected_blocks` and `/player_selection` stay empty or inconsistent.
+- False environment detections: a background object can win the largest-contour test for a color.
+- Hand mistaken for red: skin HSV can overlap with red if skin pixels are not excluded from block masks.
+- Selection always chooses one block: usually means block detections or 3D positions are wrong before selection logic runs.
+- One-frame dropouts: block detection can flicker even when the setup is mostly correct, so downstream logic should not assume every single frame is perfect.
+
 ## 8) Failure Modes and Fixes
 
 No detections:

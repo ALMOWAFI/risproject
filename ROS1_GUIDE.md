@@ -142,6 +142,15 @@ Current meaning:
 - `full_system.launch`: legacy convenience launch; not the recommended real-robot entrypoint
 - `real_robot.launch`: bringup include only, not the whole robot-game integration story
 
+## Lab Gotchas We Actually Hit
+
+- Wrong camera topic names will make `vision_node` look alive but publish nothing useful.
+- If `/player_selection` keeps saying red, check `/detected_blocks` first. The selection problem was usually caused by bad block detection, not the game logic itself.
+- If a removed block still appears, that usually means the scene still contains a false positive for that color, not that the node is "remembering" the old block.
+- The Panda lab stack may not accept a simple pose topic. Probe first with `bash newmotion/probe_motion_interface.sh` before assuming which motion node to run.
+- `motion_node` is only for demo/RViz. For real robot work, use `motion_moveit_node` or `motion_hw_node` depending on the actual lab interface.
+- If `rostopic echo` says it cannot load `memory_game/...` messages, rebuild and source the workspace again.
+
 ## Common Problems
 
 ### Message type unknown
