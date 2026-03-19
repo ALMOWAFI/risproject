@@ -1,146 +1,173 @@
-# ROS1 guide — Memory Game (Franka Panda)
+# ROS1 Guide - Memory Game (Current Repo Workflow)
 
-Short reference for **this project**: Franka Panda arm + RGB camera + depth camera, ROS1.
+Short project-specific reference for this repo.
 
----
+## What We Actually Run
 
-## Our setup
+Core nodes:
 
-| Component | What we use | ROS (we don't write these) |
-|-----------|-------------|----------------------------|
-| Robot | Franka Emika Panda | `franka_ros` — provides `joint_states`, we send motion |
-| RGB image | One color camera | Topic e.g. `/camera/color/image_raw` |
-| Depth | One depth camera | Topic e.g. `/camera/depth/image_raw` |
+- `vision_node`
+- `game_node`
+- one motion node, depending on the environment
 
-We only write: **vision_node**, **game_node**, **motion_node**. Robot and cameras run from their own drivers.
+Motion choices:
 
----
+- `motion_node`: RViz/demo only
+- `motion_hw_node`: pose-topic bridge for robot stacks that already accept a pose command topic
+- `motion_moveit_node`: Panda lab path when `/move_group` is available
 
-## Workspace (one-time)
+## Workspace
 
 ```bash
 mkdir -p ~/catkin_ws/src
 cd ~/catkin_ws/src
-catkin_init_workspace
 git clone <repo-url> memory_game
 cd ~/catkin_ws
 catkin_make
 source devel/setup.bash
 ```
 
-Add to `~/.bashrc` so you don’t forget:
-
-```bash
-source /opt/ros/noetic/setup.bash   # or melodic
-source ~/catkin_ws/devel/setup.bash
-```
-
----
-
-## Commands we actually use
-
-**Build**
+## Build
 
 ```bash
 cd ~/catkin_ws
-catkin_make
+catkin_make --pkg memory_game
 source devel/setup.bash
 ```
 
-**Run our package**
+Notes:
+- `motion_moveit_node` builds only if MoveIt is installed.
+- The rest of the package builds without MoveIt.
 
-```bash
-# All nodes
-roslaunch memory_game full_system.launch
-
-# Or one node (e.g. for debugging)
-rosrun memory_game vision_node
-rosrun memory_game game_node
-rosrun memory_game motion_node
-```
-
-**See what’s running**
+## Useful Commands
 
 ```bash
 rosnode list
 rostopic list
 rostopic echo /detected_blocks
+rostopic echo /player_selection
+rostopic echo /target_block
+rostopic echo /motion_status
 rostopic echo /game_state
-rqt_graph   # node–topic graph
+rqt_graph
 ```
 
-**Our topics (for reference)**
+## Camera Topics Used By Vision
 
-| Topic | Type | Who publishes |
-|-------|------|----------------|
-| `/camera/color/image_raw` | Image | Camera driver |
-| `/camera/depth/image_raw` | Image | Camera driver |
-| `/detected_blocks` | BlockArray | vision_node |
-| `/player_selection` | PlayerSelection | vision_node |
-| `/target_block` | Block | game_node |
-| `/game_state` | String | game_node |
-| `/score` | Int32 | game_node |
+Current defaults in this repo:
 
-**Debug**
+- `/realsense/color/image_raw`
+- `/realsense/aligned_depth_to_color/image_raw`
+- `/realsense/color/camera_info`
+
+If your lab machine uses different topics, override them with params when running `vision_node`.
+
+## Recommended Runs
+
+### Vision only
 
 ```bash
-# See message definition
-rosmsg show memory_game/Block
-
-# Check topic rate
-rostopic hz /camera/color/image_raw
+rosrun memory_game vision_node
 ```
 
----
-
-## Running with real robot + cameras
-
-1. Start Panda (replace with your robot IP):
-
-   ```bash
-   roslaunch franka_control franka_control.launch robot_ip:=YOUR_PANDA_IP
-   ```
-
-2. Start cameras (e.g. RealSense):
-
-   ```bash
-   roslaunch realsense2_camera rs_camera.launch
-   ```
-
-3. Start our game:
-
-   ```bash
-   roslaunch memory_game full_system.launch
-   ```
-
-(If you use different camera/robot launch files at the lab, swap the first two steps with those.)
-
----
-
-## Simulation (Gazebo)
-
-When the sim launch file is set up:
+### Game only
 
 ```bash
-roslaunch memory_game simulation.launch
+rosrun memory_game game_node
 ```
 
-Then in another terminal:
+### Demo motion only
 
 ```bash
-roslaunch memory_game full_system.launch
+rosrun memory_game motion_node
 ```
 
----
+### Pose-topic hardware path
 
-## Fixes
+```bash
+rosrun memory_game motion_hw_node _command_pose_topic:=/your_pose_topic
+```
 
-| Problem | Try |
-|--------|-----|
-| Package not found | `source ~/catkin_ws/devel/setup.bash` |
-| Message type unknown | `catkin_make` then `source devel/setup.bash` |
-| Build broken | `cd ~/catkin_ws && rm -rf build devel && catkin_make` |
+### MoveIt hardware path
 
----
+```bash
+rosrun memory_game motion_moveit_node
+```
 
-For full ROS install (Melodic/Noetic), see the official ROS wiki. This file is only for **our** project and workflow.
+## Panda Lab Workflow
+
+### 1. Check what motion interface the robot stack exposes
+
+```bash
+bash newmotion/probe_motion_interface.sh
+```
+
+### 2. If the lab stack exposes `/move_group`
+
+Use:
+
+```bash
+rosrun memory_game motion_moveit_node
+```
+
+### 3. If the lab stack exposes a pose command topic
+
+Use:
+
+```bash
+rosrun memory_game motion_hw_node _command_pose_topic:=/your_pose_topic
+```
+
+### 4. Run the rest of the stack
+
+```bash
+rosrun memory_game vision_node
+rosrun memory_game game_node
+```
+
+## Demo / RViz
+
+```bash
+roslaunch memory_game test_rviz.launch
+```
+
+This is for visualization/debugging. It is not the real robot motion path.
+
+## Launch Files
+
+Current meaning:
+
+- `test_rviz.launch`: demo/debug
+- `vision_only.launch`: vision helper
+- `full_system.launch`: legacy convenience launch; not the recommended real-robot entrypoint
+- `real_robot.launch`: bringup include only, not the whole robot-game integration story
+
+## Common Problems
+
+### Message type unknown
+
+```bash
+cd ~/catkin_ws
+catkin_make --pkg memory_game
+source devel/setup.bash
+```
+
+### `motion_moveit_node` not found
+
+MoveIt is not installed in that workspace, so the target was skipped at build time.
+
+### Vision publishes nothing
+
+Check:
+
+```bash
+rostopic hz /realsense/color/image_raw
+rostopic hz /realsense/aligned_depth_to_color/image_raw
+rostopic hz /realsense/color/camera_info
+```
+
+Also confirm TF exists from the camera optical frame to `panda_link0`.
+
+### Game keeps waiting for blocks
+
+That means `vision_node` is not publishing fresh valid block positions yet.

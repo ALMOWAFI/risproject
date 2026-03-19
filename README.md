@@ -1,129 +1,151 @@
-# Memory Game — Franka Panda + ROS1
+# Memory Game - Franka Panda + ROS1
 
-Memory game with a **Franka Emika Panda** arm. The robot shows a sequence by pointing at colored blocks; the player repeats it; we check and update the score.
+Memory game with a Franka Emika Panda arm. Vision detects colored blocks and player selections, game logic generates and checks the sequence, and motion points the robot at the requested target.
 
-**Team:** Ali, Sinan, Izat, Boburjon
+Team: Ali, Sinan, Izat, Boburjon
 
----
+## What Is Actually In This Repo
 
-## Hardware (what we use)
+This repo now has one stable game pipeline and three motion paths:
 
-| Thing | Role |
-|--------|--------|
-| **Franka Emika Panda** | Robotic arm — points at blocks, goes home |
-| **RGB camera** | Sees block colors and player (e.g. pointing) |
-| **Depth camera** | Gets 3D positions of blocks (x, y, z) |
+- `vision_node`: detects blocks and player selections from RGB + depth
+- `game_node`: owns sequence generation, score, round flow, and motion requests
+- Demo motion: `src/motion_node.cpp`
+  - RViz/debug only
+  - does not use real block positions
+- Pose-topic bridge: `newmotion/motion_hw_node.cpp`
+  - for setups that already accept a `geometry_msgs/PoseStamped` command topic
+- MoveIt bridge: `newmotion/motion_moveit_node.cpp`
+  - current real-robot path for the Panda lab setup
 
-We do **not** implement the robot or camera drivers; we use their ROS topics.
+So the real robot story is no longer just "three nodes in src". The real hardware path is:
 
----
-
-## The game (simple)
-
-1. **Robot shows sequence** — Panda points at blocks one by one (e.g. red → blue → green).
-2. **Robot goes home** — Arm returns to a safe home pose.
-3. **Player repeats** — Human points at/touches blocks in the same order (detected by cameras).
-4. **We check** — If the order matches → score goes up, next round has a longer sequence. If not → game over.
-
-So: **show sequence → wait for player → check → score/next round.**
-
----
-
-## How it's built (3 nodes)
-
-```
-RGB + Depth camera  →  vision_node   →  /detected_blocks, /player_selection
-                                            ↓
-game_node  ←───────────────────────────────  (reads blocks + selections)
-    ↓
-game_node  →  /target_block, /game_state, /score
-    ↓
-motion_node  →  moves Panda to point at block, then home
+```text
+camera topics -> vision_node -> /detected_blocks, /player_selection
+                             -> game_node -> /target_block
+                                        -> motion_moveit_node (or motion_hw_node on other setups)
 ```
 
-- **vision_node** — From RGB + depth: finds 4 blocks (position + color), detects when the player selects a block. Publishes `BlockArray` and `PlayerSelection`.
-- **game_node** — Picks random sequence, tells motion which block to point at, waits for player input, checks order, keeps score and level.
-- **motion_node** — Subscribes to `target_block`, moves Panda to point at that block, then back to home.
+## Hardware
 
----
+- Franka Emika Panda: robot arm
+- RGB camera: color image for block/player detection
+- Depth camera: 3D block position
 
-## Quick start
+We do not implement low-level robot or camera drivers here. We consume their ROS interfaces.
 
-### Build
+## Main Topics
+
+- `/detected_blocks` - `memory_game/BlockArray` - published by `vision_node`
+- `/player_selection` - `memory_game/PlayerSelection` - published by `vision_node`
+- `/target_block` - `memory_game/Block` - published by `game_node`
+- `/motion_status` - `std_msgs/String` - published by whichever motion node you run
+- `/game_state` - `std_msgs/String` - published by `game_node`
+- `/score` - `std_msgs/Int32` - published by `game_node`
+
+## Motion Paths
+
+### 1. Demo / RViz
+
+Use when you only want to see the logic flow and markers.
 
 ```bash
-cd ~/catkin_ws/src
-git clone <repo-url> memory_game
+rosrun memory_game motion_node
+```
+
+This node is not real robot control.
+
+### 2. Pose-Topic Hardware Bridge
+
+Use only if the robot stack already exposes a pose command topic.
+
+```bash
+rosrun memory_game motion_hw_node _command_pose_topic:=/your_pose_topic
+```
+
+### 3. MoveIt Hardware Bridge
+
+Use this for the Panda lab setup that exposes `/move_group`.
+
+```bash
+rosrun memory_game motion_moveit_node
+```
+
+## Build
+
+```bash
 cd ~/catkin_ws
-catkin_make
+catkin_make --pkg memory_game
 source devel/setup.bash
 ```
 
-### Run (test mode - no hardware needed)
+Note:
+- `motion_moveit_node` is only built on machines where MoveIt is installed.
+- On machines without MoveIt, the rest of the package still builds.
+
+## Recommended Run Modes
+
+### Vision only
+
+```bash
+rosrun memory_game vision_node
+```
+
+### Game only
+
+```bash
+rosrun memory_game game_node
+```
+
+### Real robot path in the lab
+
+```bash
+rosrun memory_game motion_moveit_node
+rosrun memory_game vision_node
+rosrun memory_game game_node
+```
+
+### RViz / demo path
 
 ```bash
 roslaunch memory_game test_rviz.launch
 ```
 
-This will:
-- Start all 3 nodes in test mode
-- Open RViz with 4 colored blocks visible
-- Game runs automatically
+Treat `test_rviz.launch` as a debug/demo tool, not the real robot architecture.
 
-**In RViz:** 4 colored cubes (red=0, green=1, blue=2, yellow=3) + magenta arrows (robot pointing)
+## Repo Layout
 
-**In terminal:** Game generates sequences, robot "points" at blocks, waits for player input
-
-### Test player input
-
-In another terminal:
-```bash
-source ~/catkin_ws/devel/setup.bash
-rosrun memory_game test_player_selection.py
-```
-
-When game says "Waiting for player input...", type block IDs (0-3).
-
----
-
-## Repo layout (where to edit)
-
-| Path | What |
-|------|------|
-| `src/vision_node.cpp` | Block detection + player selection from RGB/depth |
-| `src/game_node.cpp` | Sequence, scoring, when to show / wait / check |
-| `src/motion_node.cpp` | Panda motion: point at block, go home |
-| `msg/*.msg` | Message types: Block, BlockArray, PlayerSelection |
-| `launch/*.launch` | How we start sim vs real robot |
-| `config/game_params.yaml` | Tuning (e.g. sequence length, timeouts) |
-
----
-
-## Contributing
-
-1. **Before editing:** read [COLLABORATION.md](COLLABORATION.md) (pull before work, use branches, test before push).
-2. **ROS commands / setup:** see [ROS1_GUIDE.md](ROS1_GUIDE.md).
-3. **More detail on game + topics:** see [docs/architecture.md](docs/architecture.md).
-
----
-
-## Troubleshooting
-
-| Problem | Solution |
-|---------|----------|
-| Package not found | `source ~/catkin_ws/devel/setup.bash` |
-| Build broken | `cd ~/catkin_ws && rm -rf build devel && catkin_make` |
-| Messages not found | Build again then `source devel/setup.bash` |
-| RViz shows nothing | Fixed Frame = `panda_link0`, enable MarkerArray and Marker displays |
-| Game not starting | Wait 3-4 seconds after launch (game starts after delays) |
-
----
+- `src/vision_node.cpp` - RGB/depth block detection and player selection
+- `src/game_node.cpp` - game state machine, sequence, score, motion requests
+- `src/motion_node.cpp` - demo marker motion only
+- `newmotion/motion_hw_node.cpp` - pose-topic hardware bridge
+- `newmotion/motion_moveit_node.cpp` - MoveIt hardware bridge
+- `newmotion/probe_motion_interface.sh` - lab probe script for motion interfaces
+- `newmotion/MOTION_RUNBOOK.md` - lab-day motion notes
+- `msg/*.msg` - package messages
+- `config/game_params.yaml` - runtime parameters
+- `launch/test_rviz.launch` - RViz/demo launch
+- `launch/vision_only.launch` - vision launch helper
+- `launch/full_system.launch` - legacy convenience launch, not the recommended real-robot entrypoint
 
 ## Documentation
 
-- **[TASK_BREAKDOWN.md](TASK_BREAKDOWN.md)** — How to divide work, task assignments, timeline
-- **[COLLABORATION.md](COLLABORATION.md)** — Git workflow, how to work together safely
-- **[ROS1_GUIDE.md](ROS1_GUIDE.md)** — ROS commands and setup for this project
-- **[VISION_TUNING.md](VISION_TUNING.md)** — Step-by-step calibration guide for `vision_node` on real camera input
-- **[docs/architecture.md](docs/architecture.md)** — System design, game logic, topics
-- **[docs/vision_node_cpp.md](docs/vision_node_cpp.md)** — Internal explanation of the C++ `vision_node` pipeline
+- `ROS1_GUIDE.md` - practical ROS commands and current workflow
+- `VISION_TUNING.md` - vision calibration and debugging
+- `docs/architecture.md` - current system architecture
+- `docs/vision_node_cpp.md` - internal explanation of the vision implementation
+- `newmotion/MOTION_RUNBOOK.md` - real-robot motion integration notes
+- `TASK_BREAKDOWN.md` - historical planning document, not the current source of truth
+
+## Troubleshooting
+
+- Package not found:
+  - `source ~/catkin_ws/devel/setup.bash`
+- Message type unknown:
+  - rebuild, then source again
+- `motion_moveit_node` missing:
+  - MoveIt is not installed in that workspace
+- Vision publishes nothing:
+  - check camera topics, depth, camera info, and TF to `panda_link0`
+- Game waits for blocks:
+  - vision is not publishing fresh valid block detections yet

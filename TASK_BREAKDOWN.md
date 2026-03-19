@@ -1,4 +1,19 @@
-# Task Breakdown — How to Divide Work
+# Task Breakdown - Historical Planning Note
+
+This file is kept only as a record of the original planning phase.
+
+It is not the current source of truth for the repo anymore. The project changed during implementation and lab integration, especially around motion and launch workflow.
+
+Use these files instead when you want the current picture:
+
+- `README.md`
+- `ROS1_GUIDE.md`
+- `docs/architecture.md`
+- `newmotion/MOTION_RUNBOOK.md`
+
+Below this note, the old planning text is preserved for reference only.
+
+---
 
 This guide helps you split the project into tasks so everyone can work in parallel without conflicts.
 

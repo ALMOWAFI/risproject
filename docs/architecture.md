@@ -1,93 +1,129 @@
-# Architecture — game logic and nodes
+# Architecture - Current System
 
-Clear picture of the game and how the three nodes fit together. Hardware: **Franka Panda** + **RGB camera** + **depth camera**.
+This document describes the repo as it exists now, not the original plan.
 
----
+## Main Flow
 
-## The game (step by step)
+```text
+RGB + depth topics -> vision_node -> /detected_blocks, /player_selection
+                                -> game_node -> /target_block, /game_state, /score
+                                           -> one motion node
+```
 
-1. **Show sequence**  
-   Game picks a random order of blocks (e.g. red, blue, green). For each block in that order, it tells the motion node “point at this block.” The Panda points at each block one by one, then goes home.
+The game loop is:
 
-2. **Wait for player**  
-   The player must repeat the same order by pointing at or touching the blocks. The vision node sees the blocks (RGB + depth) and detects when the player “selects” a block. It publishes each selection.
+1. Vision publishes fresh block detections.
+2. Game generates a sequence.
+3. Game sends the sequence to motion through `/target_block`.
+4. Motion reports progress on `/motion_status`.
+5. After the sequence is shown, vision publishes player selections.
+6. Game compares the player input to the generated sequence.
 
-3. **Check**  
-   The game node compares the sequence it showed with the sequence of player selections.  
-   - If they match → add score, increase sequence length, go to step 1 for the next round.  
-   - If not → game over (you can define what happens next).
+## Nodes
 
-So the loop is: **show sequence → wait for player input → check → (next round or game over)**.
+### `vision_node`
 
----
+Reads:
+- RGB image
+- aligned depth image
+- camera info
+- TF
 
-## Hardware (what we have)
+Publishes:
+- `/detected_blocks`
+- `/player_selection`
+- visualization markers
+- optional debug images
 
-| What | Role in the project |
-|------|----------------------|
-| **Franka Emika Panda** | Moves to point at a block (from 3D position), then returns to home. We don’t write the low-level driver; we use its ROS interface. |
-| **RGB camera** | Gives color image. Used to see block colors and to detect player (e.g. hand pointing). |
-| **Depth camera** | Gives depth image. Used with RGB to get 3D positions (x, y, z) of blocks in the robot frame. |
+Responsibilities:
+- detect colored blocks
+- estimate 3D block positions in `panda_link0`
+- detect player hand/selection
+- reject bad detections with ROI, workspace, depth, and mask logic
 
-We only write the three nodes below. Robot and cameras run from existing drivers and publish their topics.
+### `game_node`
 
----
+Reads:
+- `/detected_blocks`
+- `/player_selection`
+- `/motion_status`
 
-## The three nodes
+Publishes:
+- `/target_block`
+- `/game_state`
+- `/score`
 
-### vision_node
+Responsibilities:
+- own the sequence and round logic
+- wait for valid block detections before starting
+- verify motion actually completed the expected targets
+- compare player selections against the shown sequence
 
-- **Reads:** RGB image, depth image (e.g. `/camera/color/image_raw`, `/camera/depth/image_raw`).
-- **Does:** Finds the 4 blocks (color + 3D position in robot frame). Detects when the player selects a block (e.g. by pointing or touching).
-- **Writes:**  
-  - `/detected_blocks` (BlockArray) — all blocks, with position and color.  
-  - `/player_selection` (PlayerSelection) — when the player selects a block.
+### Motion Layer
 
-### game_node
+There are three motion executors in the repo.
 
-- **Reads:** `/detected_blocks`, `/player_selection`.
-- **Does:**  
-  - Picks random sequence of blocks.  
-  - Publishes `/target_block` one by one so the Panda shows the sequence.  
-  - Waits for player selections.  
-  - Checks if the order of selections matches the sequence.  
-  - Updates score and level; publishes `/game_state` and `/score`.
-- **Writes:** `/target_block`, `/game_state`, `/score`.
+#### `src/motion_node.cpp`
 
-### motion_node
+Purpose:
+- demo/debug only
+- publishes marker-style motion behavior for RViz/testing
 
-- **Reads:** `/target_block` (which block to point at, with position).
-- **Does:** Moves the Panda to point at that block, then back to home. (Optionally publishes when motion is done.)
-- **Writes:** (optional) `/motion_status` or similar for “moving” / “done”.
+Important:
+- not real robot control
+- does not use real detected target positions for execution
 
----
+#### `newmotion/motion_hw_node.cpp`
 
-## Topics (summary)
+Purpose:
+- bridge from `/target_block` to a `geometry_msgs/PoseStamped` command topic
 
-| Topic | Type | Publisher | Subscriber |
-|-------|------|-----------|------------|
-| `/camera/color/image_raw` | Image | Camera driver | vision_node |
-| `/camera/depth/image_raw` | Image | Camera driver | vision_node |
-| `/detected_blocks` | BlockArray | vision_node | game_node |
-| `/player_selection` | PlayerSelection | vision_node | game_node |
-| `/target_block` | Block | game_node | motion_node |
-| `/game_state` | String | game_node | (optional) |
-| `/score` | Int32 | game_node | (optional) |
+Use when:
+- the robot stack already exposes a pose command interface
 
----
+#### `newmotion/motion_moveit_node.cpp`
 
-## Message types (our package)
+Purpose:
+- bridge from `/target_block` to MoveIt plan-and-execute
 
-- **Block** — one block: id, color, position (x,y,z), confidence, etc.
-- **BlockArray** — list of Block (all detected blocks).
-- **PlayerSelection** — which block the player selected (id, color, time, etc.).
+Use when:
+- the robot stack exposes `/move_group`
+- this is the current intended Panda lab path
 
-Exact definitions are in `msg/` in the repo.
+## Topics
 
----
+- `/detected_blocks` - `memory_game/BlockArray`
+- `/player_selection` - `memory_game/PlayerSelection`
+- `/target_block` - `memory_game/Block`
+- `/motion_status` - `std_msgs/String`
+- `/game_state` - `std_msgs/String`
+- `/score` - `std_msgs/Int32`
 
-## Data flow in one sentence
+## Motion Status Contract
 
-Cameras → **vision_node** → blocks and selections → **game_node** → target block → **motion_node** → Panda moves; game_node checks selections and updates score.
+`game_node` now expects motion feedback during sequence display.
 
-This doc is the single place that ties the **game logic** (show → repeat → check) to the **Franka Panda** and the **two cameras**, and makes it easy to read and contribute.
+Common states:
+- `MOVING_TO_TARGET:<block_id>`
+- `AT_TARGET:<block_id>`
+- `RETURNING_HOME:<block_id>`
+- `MOVE_FAILED:<block_id>`
+- `IDLE`
+
+The important point is that real motion completion is no longer treated as a generic success signal. The game uses these statuses to verify what was actually shown.
+
+## Real Robot Notes
+
+For the Panda lab stack, the practical path is:
+
+1. probe the available interface with `newmotion/probe_motion_interface.sh`
+2. if `/move_group` is present, use `motion_moveit_node`
+3. if a direct pose command topic exists instead, use `motion_hw_node`
+
+## What Is Not True Anymore
+
+These old assumptions should not be used as the main repo story anymore:
+
+- that `motion_node` is the real robot executor
+- that launch files are the main source of truth for how to run the system
+- that the original task breakdown still matches the implemented architecture
