@@ -13,6 +13,7 @@
 #include <random>
 #include <string>
 #include <algorithm>
+#include <sstream>
 
 enum class GameState {
     IDLE,
@@ -48,6 +49,7 @@ private:
     std::vector<int> sequence_;
     std::vector<int> player_input_;
     std::map<int, memory_game::Block> known_blocks_;
+    std::map<int, ros::Time> block_seen_times_;
 
     int score_;
     int level_;
@@ -74,6 +76,7 @@ private:
     bool require_detected_blocks_;
     bool disable_red_;
     double blocks_wait_sec_;
+    double block_freshness_sec_;
     // When using batch-publish mode, publishing /target_block before motion starts can drop messages.
     // This makes the "show sequence" incomplete with no obvious error, so we wait for a subscriber.
     double target_subscriber_poll_sec_;
@@ -84,6 +87,7 @@ private:
     std::vector<int> available_block_ids_;
     // Guard against publishing the same sequence multiple times while we wait for subscribers.
     bool sequence_sent_to_motion_;
+    int sequence_targets_completed_;
     ros::Time target_sub_wait_start_;
 
 public:
@@ -98,7 +102,8 @@ public:
           motion_started_for_sequence_(false),
           have_motion_state_(false),
           gen_(std::random_device{}()),
-          sequence_sent_to_motion_(false) {
+          sequence_sent_to_motion_(false),
+          sequence_targets_completed_(0) {
         loadParams();
 
         blocks_sub_ = nh_.subscribe("/detected_blocks", 10, &GameNode::blocksCallback, this);
@@ -141,6 +146,7 @@ private:
         pnh_.param("require_detected_blocks", require_detected_blocks_, true);
         pnh_.param("disable_red", disable_red_, false);
         pnh_.param("blocks_wait_sec", blocks_wait_sec_, 0.5);
+        pnh_.param("block_freshness_sec", block_freshness_sec_, 0.20);
         pnh_.param("target_subscriber_poll_sec", target_subscriber_poll_sec_, 0.2);
         pnh_.param("target_subscriber_timeout_sec", target_subscriber_timeout_sec_, 5.0);
 
@@ -163,6 +169,7 @@ private:
             player_timeout_sec_ = 0.0;
         }
         blocks_wait_sec_ = std::max(0.05, blocks_wait_sec_);
+        block_freshness_sec_ = std::max(0.0, block_freshness_sec_);
         target_subscriber_poll_sec_ = std::max(0.05, target_subscriber_poll_sec_);
         target_subscriber_timeout_sec_ = std::max(0.0, target_subscriber_timeout_sec_);
 
@@ -180,12 +187,53 @@ private:
         }
     }
 
-    bool haveAllBlocks() const {
-        if (known_blocks_.size() < available_block_ids_.size()) {
+    bool isBlockFresh(int id, const ros::Time& now) const {
+        auto it = known_blocks_.find(id);
+        if (it == known_blocks_.end()) {
             return false;
         }
+
+        auto seen_it = block_seen_times_.find(id);
+        if (seen_it == block_seen_times_.end()) {
+            return false;
+        }
+
+        if (block_freshness_sec_ <= 0.0) {
+            return true;
+        }
+
+        return (now - seen_it->second).toSec() <= block_freshness_sec_;
+    }
+
+    int freshBlockCount(const ros::Time& now) const {
+        int count = 0;
+        for (const auto& entry : known_blocks_) {
+            if (isBlockFresh(entry.first, now)) {
+                ++count;
+            }
+        }
+        return count;
+    }
+
+    void pruneStaleBlocks(const ros::Time& now) {
+        if (block_freshness_sec_ <= 0.0) {
+            return;
+        }
+
+        for (auto it = block_seen_times_.begin(); it != block_seen_times_.end();) {
+            if ((now - it->second).toSec() > block_freshness_sec_) {
+                known_blocks_.erase(it->first);
+                it = block_seen_times_.erase(it);
+            } else {
+                ++it;
+            }
+        }
+    }
+
+    bool haveAllBlocks() const {
+        const ros::Time now = ros::Time::now();
         for (const int id : available_block_ids_) {
-            if (known_blocks_.find(id) == known_blocks_.end()) {
+            if (!isBlockFresh(id, now)) {
                 return false;
             }
         }
@@ -193,34 +241,95 @@ private:
     }
 
     void blocksCallback(const memory_game::BlockArray::ConstPtr& msg) {
-        // Treat each BlockArray as the current truth from vision so stale detections do not linger.
-        std::map<int, memory_game::Block> fresh_blocks;
+        const ros::Time stamp = msg->header.stamp.isZero() ? ros::Time::now() : msg->header.stamp;
         for (const auto& block : msg->blocks) {
-            fresh_blocks[block.id] = block;
+            known_blocks_[block.id] = block;
+            block_seen_times_[block.id] = stamp;
         }
-        known_blocks_.swap(fresh_blocks);
+        pruneStaleBlocks(stamp);
+    }
+
+    bool parseMotionStatus(const std::string& raw, std::string& state, int& block_id) const {
+        state = raw;
+        block_id = -1;
+
+        const std::size_t colon = raw.find(':');
+        if (colon == std::string::npos) {
+            return false;
+        }
+
+        state = raw.substr(0, colon);
+        const std::string id_text = raw.substr(colon + 1);
+        std::istringstream iss(id_text);
+        if (!(iss >> block_id)) {
+            block_id = -1;
+            return false;
+        }
+
+        return true;
     }
 
     void motionCallback(const std_msgs::String::ConstPtr& msg) {
         last_motion_state_ = msg->data;
         have_motion_state_ = true;
 
+        std::string motion_state;
+        int completed_block_id = -1;
+        const bool has_block_id = parseMotionStatus(msg->data, motion_state, completed_block_id);
+
         if (current_state_ == GameState::SHOWING_SEQUENCE && waiting_for_motion_) {
-            if (last_motion_state_ == "MOVE_FAILED") {
+            if (motion_state == "MOVE_FAILED") {
+                if (has_block_id) {
+                    ROS_ERROR("Motion reported failure while executing block %d", completed_block_id);
+                }
                 abortDueToMotionFailure();
                 return;
             }
 
-            if (last_motion_state_ == "MOVING_TO_TARGET" ||
-                last_motion_state_ == "AT_TARGET" ||
-                last_motion_state_ == "RETURNING_HOME") {
+            if (motion_state == "MOVING_TO_TARGET" ||
+                motion_state == "AT_TARGET" ||
+                motion_state == "RETURNING_HOME") {
                 motion_started_for_sequence_ = true;
             }
 
-            // Sequence is done once motion returns to IDLE after executing queued targets.
-            if (last_motion_state_ == "IDLE" && motion_started_for_sequence_) {
+            if (motion_state == "AT_TARGET") {
+                const int expected_targets = static_cast<int>(sequence_.size());
+                if (sequence_targets_completed_ >= expected_targets) {
+                    ROS_WARN("Received extra AT_TARGET after sequence completion (%d expected)",
+                             expected_targets);
+                } else {
+                    const int expected_block_id = sequence_[sequence_targets_completed_];
+                    if (has_block_id && completed_block_id != expected_block_id) {
+                        ROS_ERROR("Motion reached block %d but expected block %d at step %d/%d",
+                                  completed_block_id,
+                                  expected_block_id,
+                                  sequence_targets_completed_ + 1,
+                                  expected_targets);
+                        abortDueToMotionFailure();
+                        return;
+                    }
+
+                    ++sequence_targets_completed_;
+                    if (!has_block_id) {
+                        ROS_WARN_THROTTLE(2.0, "Motion AT_TARGET status does not identify the completed block");
+                    }
+                    ROS_INFO("Motion completed target %d/%d",
+                             sequence_targets_completed_,
+                             expected_targets);
+                }
+            }
+
+            if (motion_state == "IDLE" && motion_started_for_sequence_) {
                 waiting_for_motion_ = false;
                 motion_started_for_sequence_ = false;
+
+                if (sequence_targets_completed_ < static_cast<int>(sequence_.size())) {
+                    ROS_ERROR("Motion returned to IDLE after only %d/%zu targets",
+                              sequence_targets_completed_, sequence_.size());
+                    abortDueToMotionFailure();
+                    return;
+                }
+
                 current_state_ = GameState::WAITING_PLAYER;
                 publishState("WAITING_PLAYER");
                 ROS_INFO("Sequence complete. Waiting for player input...");
@@ -292,6 +401,7 @@ private:
     void abortDueToMotionFailure() {
         waiting_for_motion_ = false;
         motion_started_for_sequence_ = false;
+        sequence_targets_completed_ = 0;
         show_timer_.stop();
         show_failsafe_timer_.stop();
         target_sub_wait_timer_.stop();
@@ -305,10 +415,11 @@ private:
     void waitForBlocksAndRetry(const std::string& reason) {
         waiting_for_motion_ = false;
         motion_started_for_sequence_ = false;
+        sequence_targets_completed_ = 0;
         sequence_sent_to_motion_ = false;
         publishState("WAITING_FOR_BLOCKS");
-        ROS_WARN_THROTTLE(2.0, "%s Waiting for current /detected_blocks (%zu/%zu cached)",
-                          reason.c_str(), known_blocks_.size(), available_block_ids_.size());
+        ROS_WARN_THROTTLE(2.0, "%s Waiting for current /detected_blocks (%d/%zu cached)",
+                          reason.c_str(), freshBlockCount(ros::Time::now()), available_block_ids_.size());
         target_sub_wait_timer_ = nh_.createTimer(
             ros::Duration(blocks_wait_sec_),
             &GameNode::targetSubWaitCallback,
@@ -317,8 +428,9 @@ private:
     }
 
     bool haveSequenceTargets() const {
+        const ros::Time now = ros::Time::now();
         for (const int block_id : sequence_) {
-            if (known_blocks_.find(block_id) == known_blocks_.end()) {
+            if (!isBlockFresh(block_id, now)) {
                 return false;
             }
         }
@@ -339,8 +451,8 @@ private:
         // This avoids motion being driven by the default/fallback target.
         if (require_detected_blocks_ && !haveAllBlocks()) {
             publishState("WAITING_FOR_BLOCKS");
-            ROS_WARN_THROTTLE(2.0, "Waiting for /detected_blocks (%zu/%d blocks cached)",
-                              known_blocks_.size(), static_cast<int>(available_block_ids_.size()));
+            ROS_WARN_THROTTLE(2.0, "Waiting for /detected_blocks (%d/%d blocks cached)",
+                              freshBlockCount(ros::Time::now()), static_cast<int>(available_block_ids_.size()));
             start_timer_ = nh_.createTimer(
                 ros::Duration(blocks_wait_sec_),
                 &GameNode::startTimerCallback,
@@ -363,6 +475,7 @@ private:
         player_index_ = 0;
         waiting_for_motion_ = false;
         motion_started_for_sequence_ = false;
+        sequence_targets_completed_ = 0;
         sequence_sent_to_motion_ = false;
         target_sub_wait_start_ = ros::Time(0);
         target_sub_wait_timer_.stop();
@@ -413,13 +526,8 @@ private:
 
             const double waited_sec = (now - target_sub_wait_start_).toSec();
             if (waited_sec > target_subscriber_timeout_sec_) {
-                ROS_WARN("No /target_block subscribers after %.1fs. Proceeding to player input.", waited_sec);
-                sequence_sent_to_motion_ = true;
-                waiting_for_motion_ = false;
-                motion_started_for_sequence_ = false;
-                current_state_ = GameState::WAITING_PLAYER;
-                publishState("WAITING_PLAYER");
-                resetPlayerTimeout();
+                ROS_ERROR("No /target_block subscribers after %.1fs", waited_sec);
+                abortDueToMotionFailure();
                 return;
             }
 
@@ -581,10 +689,11 @@ private:
     }
 
     bool tryMakeTargetBlock(int block_id, memory_game::Block& target) const {
+        const ros::Time now = ros::Time::now();
         auto it = known_blocks_.find(block_id);
-        if (it != known_blocks_.end()) {
+        if (it != known_blocks_.end() && isBlockFresh(block_id, now)) {
             target = it->second;
-            target.header.stamp = ros::Time::now();
+            target.header.stamp = now;
             target.id = block_id;
             return true;
         }

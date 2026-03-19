@@ -354,10 +354,17 @@ private:
             applyRoiMask(skin_mask);
         }
 
-        cv::Mat debug_mask_accum = cv::Mat::zeros(hsv.size(), CV_8UC1);
-        cv::Mat debug_overlay = cv_ptr->image.clone();
+        const bool publish_debug_images =
+            enable_debug_images_ &&
+            ((debug_mask_pub_.getNumSubscribers() > 0) ||
+             (debug_overlay_pub_.getNumSubscribers() > 0));
 
-        if (enable_debug_images_) {
+        cv::Mat debug_mask_accum;
+        cv::Mat debug_overlay;
+        if (publish_debug_images) {
+            debug_mask_accum = cv::Mat::zeros(hsv.size(), CV_8UC1);
+            debug_overlay = cv_ptr->image.clone();
+
             cv::Rect roi;
             if (computeRoiRect(hsv.size(), roi)) {
                 cv::rectangle(debug_overlay, roi, cv::Scalar(255, 255, 255), 2);
@@ -367,7 +374,7 @@ private:
         for (const ColorConfig& cfg : color_configs_) {
             // Per-color 2D detection in image space.
             const DetectionResult det = detectColorBlob(hsv, cfg, skin_mask);
-            if (enable_debug_images_ && !det.mask.empty()) {
+            if (publish_debug_images && !det.mask.empty()) {
                 cv::bitwise_or(debug_mask_accum, det.mask, debug_mask_accum);
             }
             if (!det.valid) {
@@ -408,7 +415,7 @@ private:
 
             blocks.push_back(block);
 
-            if (enable_debug_images_) {
+            if (publish_debug_images) {
                 cv::circle(debug_overlay, cv::Point(det.u, det.v), 6, cv::Scalar(255, 255, 255), 2);
                 cv::putText(debug_overlay,
                             cfg.name,
@@ -428,18 +435,20 @@ private:
         publishBlocks(blocks, msg->header.stamp);
         publishMarkers(blocks, msg->header.stamp);
 
-        if (enable_player_detection_ && !blocks.empty()) {
+        if (enable_player_detection_) {
             geometry_msgs::Point hand_base;
             if (detectHandInBase(msg->header, skin_mask, hand_base)) {
-                tryPublishPlayerSelection(blocks, hand_base, msg->header);
+                if (!blocks.empty()) {
+                    tryPublishPlayerSelection(blocks, hand_base, msg->header);
+                } else {
+                    resetSelectionTrackingForHandPresent();
+                }
             } else {
                 resetSelectionTrackingForNoHand();
             }
-        } else if (enable_player_detection_) {
-            resetSelectionTrackingForNoHand();
         }
 
-        if (enable_debug_images_) {
+        if (publish_debug_images) {
             publishDebugImages(debug_mask_accum, debug_overlay, msg->header);
         }
 
@@ -545,6 +554,11 @@ private:
             selection_armed_ = false;
         }
         ROS_INFO_THROTTLE(0.5, "Player selection: block %d (%s)", best_id, best_color.c_str());
+    }
+
+    void resetSelectionTrackingForHandPresent() {
+        stable_candidate_id_ = -1;
+        stable_candidate_since_ = ros::Time(0);
     }
 
     void resetSelectionTrackingForNoHand() {

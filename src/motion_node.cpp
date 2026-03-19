@@ -30,7 +30,9 @@ std::deque<memory_game::Block> target_queue;
 double speed = 0.02;
 ros::Time state_start_time;
 
-void publishStatus(const std::string& state);
+int active_block_id = -1;
+
+void publishStatus(const std::string& state, int block_id = -1);
 
 void startNextTarget()
 {
@@ -41,6 +43,7 @@ void startNextTarget()
     const memory_game::Block next = target_queue.front();
     target_queue.pop_front();
 
+    active_block_id = next.id;
     ROS_INFO("Moving to block %d", next.id);
 
     target_pos.x = 0.4;
@@ -48,15 +51,19 @@ void startNextTarget()
     target_pos.z = 0.2;
 
     current_state = MOVING_TO_TARGET;
-    publishStatus("MOVING_TO_TARGET");
+    publishStatus("MOVING_TO_TARGET", active_block_id);
 }
 
 
 // ---------------- STATUS PUBLISH ----------------
-void publishStatus(const std::string& state)
+void publishStatus(const std::string& state, int block_id)
 {
     std_msgs::String msg;
-    msg.data = state;
+    if (block_id >= 0) {
+        msg.data = state + ":" + std::to_string(block_id);
+    } else {
+        msg.data = state;
+    }
     status_pub.publish(msg);
 }
 
@@ -201,7 +208,7 @@ int main(int argc, char** argv)
                 {
                     current_state = AT_TARGET;
                     state_start_time = ros::Time::now();
-                    publishStatus("AT_TARGET");
+                    publishStatus("AT_TARGET", active_block_id);
                 }
 
                 break;
@@ -212,7 +219,7 @@ int main(int argc, char** argv)
                 if ((ros::Time::now() - state_start_time).toSec() > 1.0)
                 {
                     current_state = RETURNING_HOME;
-                    publishStatus("RETURNING_HOME");
+                    publishStatus("RETURNING_HOME", active_block_id);
                 }
 
                 break;

@@ -54,9 +54,13 @@ class MotionHwNode {
   }
 
  private:
-  void publishStatus(const std::string& state) {
+  void publishStatus(const std::string& state, int block_id = -1) {
     std_msgs::String msg;
-    msg.data = state;
+    if (block_id >= 0) {
+      msg.data = state + ":" + std::to_string(block_id);
+    } else {
+      msg.data = state;
+    }
     status_pub_.publish(msg);
   }
 
@@ -78,7 +82,7 @@ class MotionHwNode {
 
     last_target_block_id_ = next.id;
     state_ = MOVING_TO_TARGET;
-    publishStatus("MOVING_TO_TARGET");
+    publishStatus("MOVING_TO_TARGET", last_target_block_id_);
 
     // Convert target block into a pose command in the same frame.
     geometry_msgs::PoseStamped cmd;
@@ -101,7 +105,7 @@ class MotionHwNode {
       return;
     }
     state_ = AT_TARGET;
-    publishStatus("AT_TARGET");
+    publishStatus("AT_TARGET", last_target_block_id_);
 
     hold_timer_ =
         nh_.createTimer(ros::Duration(hold_sec_), &MotionHwNode::holdTimerCb, this, true);
@@ -118,7 +122,7 @@ class MotionHwNode {
     }
 
     state_ = RETURNING_HOME;
-    publishStatus("RETURNING_HOME");
+    publishStatus("RETURNING_HOME", last_target_block_id_);
 
     home_pose_.header.stamp = ros::Time::now();
     cmd_pub_.publish(home_pose_);
