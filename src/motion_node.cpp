@@ -184,6 +184,8 @@ int main(int argc, char** argv)
     current_pos = home_pos;
     publishStatus("IDLE");
 
+    ROS_WARN("motion_node is a marker/demo node. It ignores /target_block.position and uses synthetic targets.");
+
     ros::Rate rate(60);
 
     while (ros::ok())

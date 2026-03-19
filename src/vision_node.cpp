@@ -161,7 +161,7 @@ private:
         pnh_.param("max_depth_age_sec", max_depth_age_sec_, 0.25);
 
         pnh_.param("marker_size_m", marker_size_m_, 0.05);
-        pnh_.param("enable_debug_images", enable_debug_images_, false);
+        pnh_.param("enable_debug_images", enable_debug_images_, true);
         pnh_.param("smoothing_alpha", smoothing_alpha_, 0.35);
 
         pnh_.param("enable_player_detection", enable_player_detection_, true);

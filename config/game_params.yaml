@@ -16,7 +16,7 @@ game_node:
   default_y: 0.00
   default_z: 0.05
   disable_red: false
-  require_detected_blocks: false
+  require_detected_blocks: true
   blocks_wait_sec: 0.5
   # Batch publishing /target_block can be dropped if motion isn't subscribed yet.
   target_subscriber_poll_sec: 0.2
@@ -62,7 +62,7 @@ vision_node:
 
   # Output behavior
   marker_size_m: 0.05
-  enable_debug_images: false
+  enable_debug_images: true
   smoothing_alpha: 0.35     # 0=no update, 1=no smoothing
 
   # Player selection (real hand detection)

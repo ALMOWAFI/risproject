@@ -3,7 +3,7 @@
     <!-- Arguments -->
     <arg name="use_rviz" default="true"/>
     <arg name="use_real_robot" default="false"/>
-    <arg name="enable_debug_images" default="false"/>
+    <arg name="enable_debug_images" default="true"/>
     
     <!-- Game parameters -->
     <rosparam file="$(find memory_game)/config/game_params.yaml" command="load"/>

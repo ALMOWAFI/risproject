@@ -3,7 +3,7 @@
     <!-- Launch only real vision node -->
     <arg name="use_rviz" default="true"/>
     <arg name="use_image_view" default="false"/>
-    <arg name="enable_debug_images" default="false"/>
+    <arg name="enable_debug_images" default="true"/>
     
     <!-- Vision Node -->
     <node name="vision_node" pkg="memory_game" type="vision_node" output="screen">

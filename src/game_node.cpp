@@ -19,6 +19,7 @@ enum class GameState {
     SHOWING_SEQUENCE,
     WAITING_PLAYER,
     CHECKING_INPUT,
+    MOTION_FAILED,
     GAME_OVER
 };
 
@@ -137,7 +138,7 @@ private:
         pnh_.param("start_delay_sec", start_delay_sec_, 0.8);
         pnh_.param("no_immediate_repeat", no_immediate_repeat_, true);
         pnh_.param("target_frame", target_frame_, std::string("panda_link0"));
-        pnh_.param("require_detected_blocks", require_detected_blocks_, false);
+        pnh_.param("require_detected_blocks", require_detected_blocks_, true);
         pnh_.param("disable_red", disable_red_, false);
         pnh_.param("blocks_wait_sec", blocks_wait_sec_, 0.5);
         pnh_.param("target_subscriber_poll_sec", target_subscriber_poll_sec_, 0.2);
@@ -192,9 +193,12 @@ private:
     }
 
     void blocksCallback(const memory_game::BlockArray::ConstPtr& msg) {
+        // Treat each BlockArray as the current truth from vision so stale detections do not linger.
+        std::map<int, memory_game::Block> fresh_blocks;
         for (const auto& block : msg->blocks) {
-            known_blocks_[block.id] = block;
+            fresh_blocks[block.id] = block;
         }
+        known_blocks_.swap(fresh_blocks);
     }
 
     void motionCallback(const std_msgs::String::ConstPtr& msg) {
@@ -202,6 +206,11 @@ private:
         have_motion_state_ = true;
 
         if (current_state_ == GameState::SHOWING_SEQUENCE && waiting_for_motion_) {
+            if (last_motion_state_ == "MOVE_FAILED") {
+                abortDueToMotionFailure();
+                return;
+            }
+
             if (last_motion_state_ == "MOVING_TO_TARGET" ||
                 last_motion_state_ == "AT_TARGET" ||
                 last_motion_state_ == "RETURNING_HOME") {
@@ -261,12 +270,13 @@ private:
 
     void showFailsafeCallback(const ros::TimerEvent&) {
         if (current_state_ == GameState::SHOWING_SEQUENCE && waiting_for_motion_) {
-            ROS_WARN("Motion sequence completion timeout; switching to player input");
-            waiting_for_motion_ = false;
-            motion_started_for_sequence_ = false;
-            current_state_ = GameState::WAITING_PLAYER;
-            publishState("WAITING_PLAYER");
-            resetPlayerTimeout();
+            if (!motion_started_for_sequence_) {
+                ROS_ERROR("Motion never started before sequence timeout");
+                abortDueToMotionFailure();
+                return;
+            }
+            ROS_ERROR("Motion sequence timed out before completion");
+            abortDueToMotionFailure();
         }
     }
 
@@ -275,8 +285,44 @@ private:
     }
 
     void targetSubWaitCallback(const ros::TimerEvent&) {
-        // Retry sending the sequence once motion is subscribed to /target_block.
+        // Retry sending the sequence after motion/vision prerequisites become available.
         sendSequenceBatchToMotion();
+    }
+
+    void abortDueToMotionFailure() {
+        waiting_for_motion_ = false;
+        motion_started_for_sequence_ = false;
+        show_timer_.stop();
+        show_failsafe_timer_.stop();
+        target_sub_wait_timer_.stop();
+        player_timeout_timer_.stop();
+        round_timer_.stop();
+        current_state_ = GameState::MOTION_FAILED;
+        ROS_ERROR("Motion failed while showing the sequence. Aborting round.");
+        publishState("MOTION_FAILED");
+    }
+
+    void waitForBlocksAndRetry(const std::string& reason) {
+        waiting_for_motion_ = false;
+        motion_started_for_sequence_ = false;
+        sequence_sent_to_motion_ = false;
+        publishState("WAITING_FOR_BLOCKS");
+        ROS_WARN_THROTTLE(2.0, "%s Waiting for current /detected_blocks (%zu/%zu cached)",
+                          reason.c_str(), known_blocks_.size(), available_block_ids_.size());
+        target_sub_wait_timer_ = nh_.createTimer(
+            ros::Duration(blocks_wait_sec_),
+            &GameNode::targetSubWaitCallback,
+            this,
+            true);
+    }
+
+    bool haveSequenceTargets() const {
+        for (const int block_id : sequence_) {
+            if (known_blocks_.find(block_id) == known_blocks_.end()) {
+                return false;
+            }
+        }
+        return true;
     }
 
     void playerTimeoutCallback(const ros::TimerEvent&) {
@@ -294,7 +340,7 @@ private:
         if (require_detected_blocks_ && !haveAllBlocks()) {
             publishState("WAITING_FOR_BLOCKS");
             ROS_WARN_THROTTLE(2.0, "Waiting for /detected_blocks (%zu/%d blocks cached)",
-                              known_blocks_.size(), num_blocks_);
+                              known_blocks_.size(), static_cast<int>(available_block_ids_.size()));
             start_timer_ = nh_.createTimer(
                 ros::Duration(blocks_wait_sec_),
                 &GameNode::startTimerCallback,
@@ -352,6 +398,11 @@ private:
             return;
         }
 
+        if (require_detected_blocks_ && !haveSequenceTargets()) {
+            waitForBlocksAndRetry("Sequence target missing.");
+            return;
+        }
+
         if (target_pub_.getNumSubscribers() == 0) {
             // Ensure motion is actually listening before we send the sequence.
             // In ROS topics, early publishes can be dropped if the subscriber connects later.
@@ -389,18 +440,17 @@ private:
 
         for (size_t i = 0; i < sequence_.size(); ++i) {
             const int block_id = sequence_[i];
-            memory_game::Block target = makeTargetBlock(block_id);
+            memory_game::Block target;
+            if (!tryMakeTargetBlock(block_id, target)) {
+                waitForBlocksAndRetry("Sequence target missing.");
+                return;
+            }
             target_pub_.publish(target);
             ROS_INFO("Queued block %d (%zu/%zu)", block_id, i + 1, sequence_.size());
         }
 
         if (!have_motion_state_) {
-            ROS_WARN("No motion status detected. Proceeding to player input.");
-            waiting_for_motion_ = false;
-            current_state_ = GameState::WAITING_PLAYER;
-            publishState("WAITING_PLAYER");
-            resetPlayerTimeout();
-            return;
+            ROS_WARN("No /motion_status received yet after queuing sequence. Waiting for motion feedback.");
         }
 
         const double per_target_budget_sec = std::max(2.0, show_hold_sec_ + between_show_sec_ + 1.5);
@@ -426,7 +476,17 @@ private:
         }
 
         int block_id = sequence_[show_index_];
-        memory_game::Block target = makeTargetBlock(block_id);
+        memory_game::Block target;
+        if (!tryMakeTargetBlock(block_id, target)) {
+            publishState("WAITING_FOR_BLOCKS");
+            ROS_WARN_THROTTLE(2.0, "Current show target %d missing from /detected_blocks. Retrying.", block_id);
+            show_timer_ = nh_.createTimer(
+                ros::Duration(blocks_wait_sec_),
+                &GameNode::showNextCallback,
+                this,
+                true);
+            return;
+        }
         target_pub_.publish(target);
 
         ROS_INFO("Showing block %d (%d/%zu)",
@@ -520,16 +580,20 @@ private:
             true);
     }
 
-    memory_game::Block makeTargetBlock(int block_id) const {
+    bool tryMakeTargetBlock(int block_id, memory_game::Block& target) const {
         auto it = known_blocks_.find(block_id);
         if (it != known_blocks_.end()) {
-            memory_game::Block target = it->second;
+            target = it->second;
             target.header.stamp = ros::Time::now();
             target.id = block_id;
-            return target;
+            return true;
         }
 
-        memory_game::Block target;
+        if (require_detected_blocks_) {
+            return false;
+        }
+
+        target = memory_game::Block();
         target.header.stamp = ros::Time::now();
         target.header.frame_id = target_frame_;
         target.id = block_id;
@@ -538,7 +602,8 @@ private:
         target.orientation.w = 1.0;
         target.confidence = 0.0;
         target.is_selected = false;
-        return target;
+        ROS_WARN_THROTTLE(2.0, "Using fallback target for block %d because detections are not required", block_id);
+        return true;
     }
 
     void publishState(const std::string& state) {

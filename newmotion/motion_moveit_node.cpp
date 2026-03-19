@@ -4,6 +4,7 @@
 // Requires MoveIt to be running on the robot PC (/move_group available).
 
 #include <deque>
+#include <memory>
 #include <mutex>
 #include <string>
 #include <thread>
@@ -39,6 +40,7 @@ class MotionMoveItNode {
 
     pnh_.param("pointing_offset_z", pointing_offset_z_, 0.10);
     pnh_.param("return_home", return_home_, true);
+    pnh_.param("use_current_state_as_home", use_current_state_as_home_, true);
 
     // If true, we keep the current end-effector orientation and only change XYZ.
     // This is usually the least surprising behavior for a lab setup.
@@ -58,7 +60,7 @@ class MotionMoveItNode {
     move_group_->setMaxAccelerationScalingFactor(max_acceleration_scaling_);
     move_group_->setPoseReferenceFrame(pose_frame_);
 
-    home_joint_values_ = move_group_->getCurrentJointValues();
+    configureHomeTarget();
     home_pose_ = move_group_->getCurrentPose().pose;
 
     PublishStatus(status_pub_, "IDLE");
@@ -110,18 +112,30 @@ class MotionMoveItNode {
 
       PublishStatus(status_pub_, "MOVING_TO_TARGET");
       if (!executeTarget(next)) {
-        PublishStatus(status_pub_, "MOVE_FAILED");
-        // Continue with next queued target (do not hard-stop the whole system).
-        continue;
+        failAndStopQueue("Target execution failed");
+        return;
       }
 
       PublishStatus(status_pub_, "AT_TARGET");
 
       if (return_home_) {
         PublishStatus(status_pub_, "RETURNING_HOME");
-        (void)returnHome();
+        if (!returnHome()) {
+          failAndStopQueue("Return-home motion failed");
+          return;
+        }
       }
     }
+  }
+
+  void failAndStopQueue(const std::string& reason) {
+    {
+      std::lock_guard<std::mutex> lk(mu_);
+      queue_.clear();
+      worker_running_ = false;
+    }
+    ROS_ERROR("%s", reason.c_str());
+    PublishStatus(status_pub_, "MOVE_FAILED");
   }
 
   bool executeTarget(const memory_game::Block& b) {
@@ -195,6 +209,28 @@ class MotionMoveItNode {
     return executed;
   }
 
+  void configureHomeTarget() {
+    std::vector<double> configured_home;
+    const size_t joint_count = move_group_->getCurrentJointValues().size();
+    if (pnh_.getParam("home_joint_values", configured_home) && !configured_home.empty()) {
+      if (configured_home.size() == joint_count) {
+        home_joint_values_ = configured_home;
+        ROS_INFO("Using configured home_joint_values for return-home");
+        return;
+      }
+      ROS_WARN("Ignoring home_joint_values: expected %zu joints, got %zu",
+               joint_count, configured_home.size());
+    }
+
+    if (use_current_state_as_home_) {
+      home_joint_values_ = move_group_->getCurrentJointValues();
+      ROS_INFO("Using current robot state as home target");
+    } else {
+      return_home_ = false;
+      ROS_ERROR("Return-home disabled: set ~home_joint_values or enable ~use_current_state_as_home");
+    }
+  }
+
   ros::NodeHandle nh_;
   ros::NodeHandle pnh_;
 
@@ -210,6 +246,7 @@ class MotionMoveItNode {
   double max_acceleration_scaling_ = 0.10;
   double pointing_offset_z_ = 0.10;
   bool return_home_ = true;
+  bool use_current_state_as_home_ = true;
   bool keep_current_orientation_ = true;
 
   std::unique_ptr<moveit::planning_interface::MoveGroupInterface> move_group_;
