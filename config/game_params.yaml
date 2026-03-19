@@ -71,6 +71,9 @@ vision_node:
   min_hand_area: 500            # min skin blob area (pixels)
   max_hand_area: 200000         # max skin blob area (pixels)
   require_hand_release: true
+  exclude_skin_from_block_masks: true
+  skin_mask_open_iterations: 1
+  skin_mask_close_iterations: 1
 
   # HSV ranges format: [hmin, hmax, smin, smax, vmin, vmax]
   hsv_ranges:

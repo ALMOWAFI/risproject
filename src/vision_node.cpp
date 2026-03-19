@@ -170,6 +170,9 @@ private:
         pnh_.param("max_hand_area", max_hand_area_, 200000.0);
         pnh_.param("selection_hold_sec", selection_hold_sec_, 3.0);
         pnh_.param("require_hand_release", require_hand_release_, true);
+        pnh_.param("exclude_skin_from_block_masks", exclude_skin_from_block_masks_, true);
+        pnh_.param("skin_mask_open_iterations", skin_mask_open_iterations_, 1);
+        pnh_.param("skin_mask_close_iterations", skin_mask_close_iterations_, 1);
 
         if (mask_open_iterations_ < 0) mask_open_iterations_ = 0;
         if (mask_close_iterations_ < 0) mask_close_iterations_ = 0;
@@ -180,6 +183,8 @@ private:
         min_hand_area_ = std::max(50.0, min_hand_area_);
         max_hand_area_ = std::max(min_hand_area_, max_hand_area_);
         selection_hold_sec_ = std::max(0.0, selection_hold_sec_);
+        skin_mask_open_iterations_ = std::max(0, skin_mask_open_iterations_);
+        skin_mask_close_iterations_ = std::max(0, skin_mask_close_iterations_);
 
 
         roi_x_ = std::max(0, roi_x_);
@@ -328,6 +333,13 @@ private:
         std::vector<memory_game::Block> blocks;
         blocks.reserve(color_configs_.size());
 
+        cv::Mat skin_mask;
+        const bool need_skin_mask = enable_player_detection_ || exclude_skin_from_block_masks_;
+        if (need_skin_mask) {
+            skin_mask = buildSkinMask(hsv);
+            applyRoiMask(skin_mask);
+        }
+
         cv::Mat debug_mask_accum = cv::Mat::zeros(hsv.size(), CV_8UC1);
         cv::Mat debug_overlay = cv_ptr->image.clone();
 
@@ -340,7 +352,7 @@ private:
 
         for (const ColorConfig& cfg : color_configs_) {
             // Per-color 2D detection in image space.
-            const DetectionResult det = detectColorBlob(hsv, cfg);
+            const DetectionResult det = detectColorBlob(hsv, cfg, skin_mask);
             if (enable_debug_images_ && !det.mask.empty()) {
                 cv::bitwise_or(debug_mask_accum, det.mask, debug_mask_accum);
             }
@@ -404,7 +416,7 @@ private:
 
         if (enable_player_detection_ && !blocks.empty()) {
             geometry_msgs::Point hand_base;
-            if (detectHandInBase(msg->header, hsv, hand_base)) {
+            if (detectHandInBase(msg->header, skin_mask, hand_base)) {
                 tryPublishPlayerSelection(blocks, hand_base, msg->header);
             } else {
                 resetSelectionTrackingForNoHand();
@@ -421,14 +433,8 @@ private:
     }
 
     bool detectHandInBase(const std_msgs::Header& header,
-                          const cv::Mat& hsv,
+                          const cv::Mat& skin_mask,
                           geometry_msgs::Point& hand_base) {
-        cv::Mat skin_mask;
-        cv::inRange(hsv, cv::Scalar(0, 40, 40), cv::Scalar(15, 255, 255), skin_mask);
-        cv::Mat skin_mask2;
-        cv::inRange(hsv, cv::Scalar(165, 40, 40), cv::Scalar(180, 255, 255), skin_mask2);
-        cv::bitwise_or(skin_mask, skin_mask2, skin_mask);
-
         std::vector<std::vector<cv::Point> > contours;
         cv::findContours(skin_mask, contours, cv::RETR_EXTERNAL, cv::CHAIN_APPROX_SIMPLE);
 
@@ -564,7 +570,29 @@ private:
                p.z >= workspace_min_z_ && p.z <= workspace_max_z_;
     }
 
-    DetectionResult detectColorBlob(const cv::Mat& hsv, const ColorConfig& cfg) const {
+    cv::Mat buildSkinMask(const cv::Mat& hsv) const {
+        cv::Mat skin_mask;
+        cv::inRange(hsv, cv::Scalar(0, 40, 40), cv::Scalar(15, 255, 255), skin_mask);
+
+        cv::Mat skin_mask2;
+        cv::inRange(hsv, cv::Scalar(165, 40, 40), cv::Scalar(180, 255, 255), skin_mask2);
+        cv::bitwise_or(skin_mask, skin_mask2, skin_mask);
+
+        if (skin_mask_open_iterations_ > 0) {
+            cv::morphologyEx(skin_mask, skin_mask, cv::MORPH_OPEN, cv::Mat(), cv::Point(-1, -1),
+                             skin_mask_open_iterations_);
+        }
+        if (skin_mask_close_iterations_ > 0) {
+            cv::morphologyEx(skin_mask, skin_mask, cv::MORPH_CLOSE, cv::Mat(), cv::Point(-1, -1),
+                             skin_mask_close_iterations_);
+        }
+
+        return skin_mask;
+    }
+
+    DetectionResult detectColorBlob(const cv::Mat& hsv,
+                                    const ColorConfig& cfg,
+                                    const cv::Mat& skin_mask) const {
         DetectionResult out;
         cv::Mat mask = cv::Mat::zeros(hsv.size(), CV_8UC1);
 
@@ -587,6 +615,10 @@ private:
         // Keep only the largest contour in valid area bounds for this color.
 
         applyRoiMask(mask);
+
+        if (exclude_skin_from_block_masks_ && !skin_mask.empty()) {
+            mask.setTo(0, skin_mask);
+        }
 
         // Keep only the largest contour in valid area bounds for this color.
         std::vector<std::vector<cv::Point> > contours;
@@ -833,6 +865,9 @@ private:
     double min_hand_area_;
     double max_hand_area_;
     bool require_hand_release_;
+    bool exclude_skin_from_block_masks_ = true;
+    int skin_mask_open_iterations_ = 1;
+    int skin_mask_close_iterations_ = 1;
     ros::Time last_selection_time_;
     int last_selected_block_id_;
     int stable_candidate_id_ = -1;
