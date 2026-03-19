@@ -71,6 +71,7 @@ private:
     double start_delay_sec_;
     bool no_immediate_repeat_;
     bool require_detected_blocks_;
+    bool disable_red_;
     double blocks_wait_sec_;
     // When using batch-publish mode, publishing /target_block before motion starts can drop messages.
     // This makes the "show sequence" incomplete with no obvious error, so we wait for a subscriber.
@@ -79,6 +80,7 @@ private:
 
     geometry_msgs::Point default_target_;
     std::string target_frame_;
+    std::vector<int> available_block_ids_;
     // Guard against publishing the same sequence multiple times while we wait for subscribers.
     bool sequence_sent_to_motion_;
     ros::Time target_sub_wait_start_;
@@ -136,6 +138,7 @@ private:
         pnh_.param("no_immediate_repeat", no_immediate_repeat_, true);
         pnh_.param("target_frame", target_frame_, std::string("panda_link0"));
         pnh_.param("require_detected_blocks", require_detected_blocks_, false);
+        pnh_.param("disable_red", disable_red_, false);
         pnh_.param("blocks_wait_sec", blocks_wait_sec_, 0.5);
         pnh_.param("target_subscriber_poll_sec", target_subscriber_poll_sec_, 0.2);
         pnh_.param("target_subscriber_timeout_sec", target_subscriber_timeout_sec_, 5.0);
@@ -161,13 +164,26 @@ private:
         blocks_wait_sec_ = std::max(0.05, blocks_wait_sec_);
         target_subscriber_poll_sec_ = std::max(0.05, target_subscriber_poll_sec_);
         target_subscriber_timeout_sec_ = std::max(0.0, target_subscriber_timeout_sec_);
+
+        available_block_ids_.clear();
+        for (int id = 0; id < num_blocks_; ++id) {
+            if (disable_red_ && id == 0) {
+                continue;
+            }
+            available_block_ids_.push_back(id);
+        }
+
+        if (available_block_ids_.empty()) {
+            ROS_WARN("disable_red removed all available blocks; falling back to block 0");
+            available_block_ids_.push_back(0);
+        }
     }
 
     bool haveAllBlocks() const {
-        if (known_blocks_.size() < static_cast<size_t>(num_blocks_)) {
+        if (known_blocks_.size() < available_block_ids_.size()) {
             return false;
         }
-        for (int id = 0; id < num_blocks_; ++id) {
+        for (const int id : available_block_ids_) {
             if (known_blocks_.find(id) == known_blocks_.end()) {
                 return false;
             }
@@ -306,14 +322,14 @@ private:
         target_sub_wait_timer_.stop();
 
         int sequence_length = base_length_ + length_per_level_ * (level_ - 1);
-        std::uniform_int_distribution<int> dis(0, num_blocks_ - 1);
+        std::uniform_int_distribution<int> dis(0, static_cast<int>(available_block_ids_.size()) - 1);
 
         int prev = -1;
         for (int i = 0; i < sequence_length; i++) {
-            int value = dis(gen_);
-            if (no_immediate_repeat_ && num_blocks_ > 1) {
+            int value = available_block_ids_[dis(gen_)];
+            if (no_immediate_repeat_ && available_block_ids_.size() > 1) {
                 while (value == prev) {
-                    value = dis(gen_);
+                    value = available_block_ids_[dis(gen_)];
                 }
             }
             sequence_.push_back(value);

@@ -15,6 +15,7 @@ game_node:
   default_x: 0.40
   default_y: 0.00
   default_z: 0.05
+  disable_red: false
   require_detected_blocks: false
   blocks_wait_sec: 0.5
   # Batch publishing /target_block can be dropped if motion isn't subscribed yet.
@@ -28,6 +29,7 @@ vision_node:
   camera_info_topic: "/realsense/color/camera_info"
   target_frame: "panda_link0"
   markers_topic: "/vision/visualization_marker_array"
+  disable_red: false
 
 
   # Optional ROI filter (pixel coords in the color image). Use this to ignore background.

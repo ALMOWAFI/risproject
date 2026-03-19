@@ -132,6 +132,7 @@ private:
         pnh_.param("camera_info_topic", camera_info_topic_, std::string("/realsense/color/camera_info"));
         pnh_.param("target_frame", target_frame_, std::string("panda_link0"));
         pnh_.param("markers_topic", markers_topic_, std::string("/vision/visualization_marker_array"));
+        pnh_.param("disable_red", disable_red_, false);
 
         // Optional ROI to ignore background (pixel coordinates in the color image).
         pnh_.param("roi_enable", roi_enable_, false);
@@ -193,6 +194,7 @@ private:
         roi_h_ = std::max(0, roi_h_);
 
         initDefaultColors();
+        applyColorFilters();
         loadHsvRangesFromParams();
     }
 
@@ -211,6 +213,18 @@ private:
         color_configs_.push_back(ColorConfig{1, "green", {{40, 85, 70, 255, 50, 255}}});
         color_configs_.push_back(ColorConfig{2, "blue", {{95, 135, 70, 255, 50, 255}}});
         color_configs_.push_back(ColorConfig{3, "yellow", {{20, 35, 100, 255, 80, 255}}});
+    }
+
+    void applyColorFilters() {
+        if (!disable_red_) {
+            return;
+        }
+
+        color_configs_.erase(
+            std::remove_if(color_configs_.begin(),
+                           color_configs_.end(),
+                           [](const ColorConfig& cfg) { return cfg.id == 0 || cfg.name == "red"; }),
+            color_configs_.end());
     }
 
     void loadHsvRangesFromParams() {
@@ -828,6 +842,7 @@ private:
     std::string camera_info_topic_;
     std::string target_frame_;
     std::string markers_topic_;
+    bool disable_red_ = false;
 
 
     bool roi_enable_ = false;
