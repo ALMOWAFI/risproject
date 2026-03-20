@@ -12,7 +12,6 @@ find_package(catkin REQUIRED COMPONENTS
   cv_bridge
   image_transport
   image_geometry
-  message_filters
   tf2_geometry_msgs
   message_generation
   tf
@@ -47,7 +46,7 @@ generate_messages(
 ## Declare this project as a catkin package
 catkin_package(
   INCLUDE_DIRS include
-  CATKIN_DEPENDS roscpp rospy std_msgs geometry_msgs sensor_msgs visualization_msgs cv_bridge image_transport image_geometry message_filters tf2_geometry_msgs message_runtime
+  CATKIN_DEPENDS roscpp rospy std_msgs geometry_msgs sensor_msgs visualization_msgs cv_bridge image_transport image_geometry tf2_geometry_msgs message_runtime
 )
 
 ###########
