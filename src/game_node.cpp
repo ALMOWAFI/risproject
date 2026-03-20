@@ -75,6 +75,7 @@ private:
     bool no_immediate_repeat_;
     bool require_detected_blocks_;
     bool disable_red_;
+    int min_detected_blocks_required_;
     double blocks_wait_sec_;
     double block_freshness_sec_;
     // When using batch-publish mode, publishing /target_block before motion starts can drop messages.
@@ -145,6 +146,7 @@ private:
         pnh_.param("target_frame", target_frame_, std::string("panda_link0"));
         pnh_.param("require_detected_blocks", require_detected_blocks_, true);
         pnh_.param("disable_red", disable_red_, false);
+        pnh_.param("min_detected_blocks_required", min_detected_blocks_required_, 3);
         pnh_.param("blocks_wait_sec", blocks_wait_sec_, 0.5);
         pnh_.param("block_freshness_sec", block_freshness_sec_, 0.20);
         pnh_.param("target_subscriber_poll_sec", target_subscriber_poll_sec_, 0.2);
@@ -170,6 +172,7 @@ private:
         }
         blocks_wait_sec_ = std::max(0.05, blocks_wait_sec_);
         block_freshness_sec_ = std::max(0.0, block_freshness_sec_);
+        min_detected_blocks_required_ = std::max(1, min_detected_blocks_required_);
         target_subscriber_poll_sec_ = std::max(0.05, target_subscriber_poll_sec_);
         target_subscriber_timeout_sec_ = std::max(0.0, target_subscriber_timeout_sec_);
 
@@ -237,6 +240,43 @@ private:
                 return false;
             }
         }
+        return true;
+    }
+
+    std::vector<int> freshDetectedBlockIds() const {
+        const ros::Time now = ros::Time::now();
+        std::vector<int> ids;
+        ids.reserve(known_blocks_.size());
+
+        for (const auto& entry : known_blocks_) {
+            const int id = entry.first;
+            if (disable_red_ && id == 0) {
+                continue;
+            }
+            if (id < 0 || id >= num_blocks_) {
+                continue;
+            }
+            if (!isBlockFresh(id, now)) {
+                continue;
+            }
+            ids.push_back(id);
+        }
+
+        std::sort(ids.begin(), ids.end());
+        return ids;
+    }
+
+    bool refreshAvailableBlocksFromDetections() {
+        if (!require_detected_blocks_) {
+            return true;
+        }
+
+        std::vector<int> detected_ids = freshDetectedBlockIds();
+        if (static_cast<int>(detected_ids.size()) < min_detected_blocks_required_) {
+            return false;
+        }
+
+        available_block_ids_ = detected_ids;
         return true;
     }
 
@@ -449,10 +489,10 @@ private:
     void startGame() {
         // On real hardware, don't start showing a sequence until we have block poses from vision.
         // This avoids motion being driven by the default/fallback target.
-        if (require_detected_blocks_ && !haveAllBlocks()) {
+        if (require_detected_blocks_ && !refreshAvailableBlocksFromDetections()) {
             publishState("WAITING_FOR_BLOCKS");
-            ROS_WARN_THROTTLE(2.0, "Waiting for /detected_blocks (%d/%d blocks cached)",
-                              freshBlockCount(ros::Time::now()), static_cast<int>(available_block_ids_.size()));
+            ROS_WARN_THROTTLE(2.0, "Waiting for /detected_blocks (%d/%d usable blocks cached)",
+                              freshBlockCount(ros::Time::now()), min_detected_blocks_required_);
             start_timer_ = nh_.createTimer(
                 ros::Duration(blocks_wait_sec_),
                 &GameNode::startTimerCallback,
@@ -512,6 +552,7 @@ private:
         }
 
         if (require_detected_blocks_ && !haveSequenceTargets()) {
+            refreshAvailableBlocksFromDetections();
             waitForBlocksAndRetry("Sequence target missing.");
             return;
         }

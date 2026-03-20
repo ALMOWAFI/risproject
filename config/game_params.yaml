@@ -17,6 +17,7 @@ game_node:
   default_z: 0.05
   disable_red: false
   require_detected_blocks: true
+  min_detected_blocks_required: 3
   blocks_wait_sec: 0.5
   block_freshness_sec: 0.20   # keep recent block poses briefly to survive one-frame vision dropouts
   # Batch publishing /target_block can be dropped if motion isn't subscribed yet.
