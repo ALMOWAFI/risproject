@@ -22,6 +22,7 @@
 #include <deque>
 #include <limits>
 #include <map>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -111,6 +112,7 @@ public:
 
         if (enable_debug_images_) {
             debug_mask_pub_ = it_.advertise("/vision/debug_mask", 1);
+            debug_hand_mask_pub_ = it_.advertise("/vision/debug_hand_mask", 1);
             debug_overlay_pub_ = it_.advertise("/vision/debug_overlay", 1);
         }
 
@@ -197,8 +199,10 @@ private:
         roi_h_ = std::max(0, roi_h_);
 
         initDefaultColors();
+        initDefaultSkinRanges();
         applyColorFilters();
         loadHsvRangesFromParams();
+        loadSkinRangesFromParams();
     }
 
     void initDefaultColors() {
@@ -208,14 +212,20 @@ private:
             0,
             "red",
             {
-                {0, 10, 100, 255, 50, 255},
-                {170, 180, 100, 255, 50, 255},
+                {0, 15, 60, 255, 30, 255},
+                {165, 180, 60, 255, 30, 255},
             },
         });
 
         color_configs_.push_back(ColorConfig{1, "green", {{40, 85, 70, 255, 50, 255}}});
         color_configs_.push_back(ColorConfig{2, "blue", {{95, 135, 70, 255, 50, 255}}});
         color_configs_.push_back(ColorConfig{3, "yellow", {{20, 35, 100, 255, 80, 255}}});
+    }
+
+    void initDefaultSkinRanges() {
+        skin_ranges_.clear();
+        skin_ranges_.push_back(HsvRange{0, 15, 40, 255, 40, 255});
+        skin_ranges_.push_back(HsvRange{165, 180, 40, 255, 40, 255});
     }
 
     void applyColorFilters() {
@@ -284,6 +294,47 @@ private:
         }
     }
 
+    void loadSkinRangesFromParams() {
+        XmlRpc::XmlRpcValue skin_cfg;
+        if (!pnh_.getParam("skin_hsv_ranges", skin_cfg)) {
+            return;
+        }
+
+        if (skin_cfg.getType() != XmlRpc::XmlRpcValue::TypeArray) {
+            ROS_WARN("Ignoring skin_hsv_ranges: expected list");
+            return;
+        }
+
+        std::vector<HsvRange> parsed;
+        for (int i = 0; i < skin_cfg.size(); ++i) {
+            if (skin_cfg[i].getType() != XmlRpc::XmlRpcValue::TypeArray || skin_cfg[i].size() != 6) {
+                ROS_WARN("Ignoring skin_hsv_ranges[%d]: expected [hmin,hmax,smin,smax,vmin,vmax]", i);
+                continue;
+            }
+
+            bool ok = true;
+            int vals[6] = {0};
+            for (int j = 0; j < 6; ++j) {
+                if (skin_cfg[i][j].getType() != XmlRpc::XmlRpcValue::TypeInt) {
+                    ok = false;
+                    break;
+                }
+                vals[j] = static_cast<int>(skin_cfg[i][j]);
+            }
+
+            if (!ok) {
+                ROS_WARN("Ignoring skin_hsv_ranges[%d]: all values must be integers", i);
+                continue;
+            }
+
+            parsed.push_back(HsvRange{vals[0], vals[1], vals[2], vals[3], vals[4], vals[5]});
+        }
+
+        if (!parsed.empty()) {
+            skin_ranges_ = parsed;
+        }
+    }
+
     void cameraInfoCallback(const sensor_msgs::CameraInfoConstPtr& msg) {
         camera_model_.fromCameraInfo(msg);
         has_camera_model_ = true;
@@ -347,17 +398,20 @@ private:
         std::vector<memory_game::Block> blocks;
         blocks.reserve(color_configs_.size());
 
+        const bool publish_debug_images =
+            enable_debug_images_ &&
+            ((debug_mask_pub_.getNumSubscribers() > 0) ||
+             (debug_hand_mask_pub_.getNumSubscribers() > 0) ||
+             (debug_overlay_pub_.getNumSubscribers() > 0));
+
         cv::Mat skin_mask;
-        const bool need_skin_mask = enable_player_detection_ || exclude_skin_from_block_masks_;
+        const bool need_skin_mask = enable_player_detection_ ||
+                                    exclude_skin_from_block_masks_ ||
+                                    (enable_debug_images_ && debug_hand_mask_pub_.getNumSubscribers() > 0);
         if (need_skin_mask) {
             skin_mask = buildSkinMask(hsv);
             applyRoiMask(skin_mask);
         }
-
-        const bool publish_debug_images =
-            enable_debug_images_ &&
-            ((debug_mask_pub_.getNumSubscribers() > 0) ||
-             (debug_overlay_pub_.getNumSubscribers() > 0));
 
         cv::Mat debug_mask_accum;
         cv::Mat debug_overlay;
@@ -449,7 +503,7 @@ private:
         }
 
         if (publish_debug_images) {
-            publishDebugImages(debug_mask_accum, debug_overlay, color_msg->header);
+            publishDebugImages(debug_mask_accum, skin_mask, debug_overlay, color_msg->header);
         }
 
         ROS_DEBUG_THROTTLE(1.0, "Published %zu detected blocks", blocks.size());
@@ -599,12 +653,15 @@ private:
     }
 
     cv::Mat buildSkinMask(const cv::Mat& hsv) const {
-        cv::Mat skin_mask;
-        cv::inRange(hsv, cv::Scalar(0, 40, 40), cv::Scalar(15, 255, 255), skin_mask);
-
-        cv::Mat skin_mask2;
-        cv::inRange(hsv, cv::Scalar(165, 40, 40), cv::Scalar(180, 255, 255), skin_mask2);
-        cv::bitwise_or(skin_mask, skin_mask2, skin_mask);
+        cv::Mat skin_mask = cv::Mat::zeros(hsv.size(), CV_8UC1);
+        for (const HsvRange& r : skin_ranges_) {
+            cv::Mat partial;
+            cv::inRange(hsv,
+                        cv::Scalar(r.h_min, r.s_min, r.v_min),
+                        cv::Scalar(r.h_max, r.s_max, r.v_max),
+                        partial);
+            cv::bitwise_or(skin_mask, partial, skin_mask);
+        }
 
         if (skin_mask_open_iterations_ > 0) {
             cv::morphologyEx(skin_mask, skin_mask, cv::MORPH_OPEN, cv::Mat(), cv::Point(-1, -1),
@@ -848,6 +905,7 @@ private:
     }
 
     void publishDebugImages(const cv::Mat& mask,
+                            const cv::Mat& hand_mask,
                             const cv::Mat& overlay,
                             const std_msgs::Header& header) {
         if (!enable_debug_images_) {
@@ -857,6 +915,11 @@ private:
         if (!mask.empty() && debug_mask_pub_) {
             cv_bridge::CvImage mask_img(header, sensor_msgs::image_encodings::MONO8, mask);
             debug_mask_pub_.publish(mask_img.toImageMsg());
+        }
+
+        if (!hand_mask.empty() && debug_hand_mask_pub_) {
+            cv_bridge::CvImage hand_mask_img(header, sensor_msgs::image_encodings::MONO8, hand_mask);
+            debug_hand_mask_pub_.publish(hand_mask_img.toImageMsg());
         }
 
         if (!overlay.empty() && debug_overlay_pub_) {
@@ -886,6 +949,7 @@ private:
     ros::Publisher selection_pub_;
 
     image_transport::Publisher debug_mask_pub_;
+    image_transport::Publisher debug_hand_mask_pub_;
     image_transport::Publisher debug_overlay_pub_;
 
     std::string color_topic_;
@@ -942,6 +1006,7 @@ private:
     bool selection_armed_ = true;
 
     std::vector<ColorConfig> color_configs_;
+    std::vector<HsvRange> skin_ranges_;
 
     cv::Mat latest_depth_;
     std::string latest_depth_encoding_;

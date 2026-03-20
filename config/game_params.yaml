@@ -77,12 +77,15 @@ vision_node:
   exclude_skin_from_block_masks: true
   skin_mask_open_iterations: 1
   skin_mask_close_iterations: 1
+  skin_hsv_ranges:
+    - [0, 15, 40, 255, 40, 255]
+    - [165, 180, 40, 255, 40, 255]
 
   # HSV ranges format: [hmin, hmax, smin, smax, vmin, vmax]
   hsv_ranges:
     red:
-      - [0, 10, 100, 255, 50, 255]
-      - [170, 180, 100, 255, 50, 255]
+      - [0, 15, 60, 255, 30, 255]
+      - [165, 180, 60, 255, 30, 255]
     green:
       - [40, 85, 70, 255, 50, 255]
     blue:
