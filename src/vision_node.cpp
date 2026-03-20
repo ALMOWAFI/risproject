@@ -21,9 +21,11 @@
 #include <cmath>
 #include <limits>
 #include <map>
+#include <memory>
 #include <string>
 #include <vector>
 
+#include <boost/bind/bind.hpp>
 #include <cv_bridge/cv_bridge.h>
 #include <geometry_msgs/PointStamped.h>
 #include <image_geometry/pinhole_camera_model.h>
@@ -31,6 +33,9 @@
 #include <memory_game/Block.h>
 #include <memory_game/BlockArray.h>
 #include <memory_game/PlayerSelection.h>
+#include <message_filters/subscriber.h>
+#include <message_filters/sync_policies/approximate_time.h>
+#include <message_filters/synchronizer.h>
 #include <opencv2/core.hpp>
 #include <opencv2/imgproc.hpp>
 #include <ros/ros.h>
@@ -113,9 +118,14 @@ public:
             debug_overlay_pub_ = it_.advertise("/vision/debug_overlay", 1);
         }
 
-        color_sub_ = nh_.subscribe(color_topic_, 5, &VisionNode::colorCallback, this);
-        depth_sub_ = nh_.subscribe(depth_topic_, 5, &VisionNode::depthCallback, this);
         camera_info_sub_ = nh_.subscribe(camera_info_topic_, 5, &VisionNode::cameraInfoCallback, this);
+        color_sub_.subscribe(nh_, color_topic_, 5);
+        depth_sub_.subscribe(nh_, depth_topic_, 5);
+        rgb_depth_sync_.reset(new message_filters::Synchronizer<RgbDepthSyncPolicy>(
+            RgbDepthSyncPolicy(sync_queue_size_), color_sub_, depth_sub_));
+        rgb_depth_sync_->setMaxIntervalDuration(ros::Duration(max_depth_age_sec_));
+        rgb_depth_sync_->registerCallback(
+            boost::bind(&VisionNode::rgbDepthCallback, this, _1, _2));
 
         ROS_INFO("vision_node ready");
         ROS_INFO("color_topic=%s", color_topic_.c_str());
@@ -159,6 +169,7 @@ private:
         pnh_.param("min_depth_m", min_depth_m_, 0.10);
         pnh_.param("max_depth_m", max_depth_m_, 2.50);
         pnh_.param("max_depth_age_sec", max_depth_age_sec_, 0.25);
+        pnh_.param("sync_queue_size", sync_queue_size_, 10);
 
         pnh_.param("marker_size_m", marker_size_m_, 0.05);
         pnh_.param("enable_debug_images", enable_debug_images_, true);
@@ -178,6 +189,7 @@ private:
         if (mask_open_iterations_ < 0) mask_open_iterations_ = 0;
         if (mask_close_iterations_ < 0) mask_close_iterations_ = 0;
         if (depth_window_radius_ < 0) depth_window_radius_ = 0;
+        sync_queue_size_ = std::max(2, sync_queue_size_);
         smoothing_alpha_ = std::max(0.0, std::min(1.0, smoothing_alpha_));
         max_select_distance_m_ = std::max(0.01, max_select_distance_m_);
         selection_cooldown_sec_ = std::max(0.0, selection_cooldown_sec_);
@@ -286,56 +298,43 @@ private:
         has_camera_model_ = true;
     }
 
-    void depthCallback(const sensor_msgs::ImageConstPtr& msg) {
+    void rgbDepthCallback(const sensor_msgs::ImageConstPtr& color_msg,
+                          const sensor_msgs::ImageConstPtr& depth_msg) {
+        if (!has_camera_model_) {
+            ROS_WARN_THROTTLE(2.0, "Waiting for camera_info before processing synchronized RGB-depth frames");
+            return;
+        }
+
         try {
-            if (msg->encoding == sensor_msgs::image_encodings::TYPE_16UC1 || msg->encoding == "16UC1") {
-                cv_bridge::CvImageConstPtr cv_ptr =
-                    cv_bridge::toCvShare(msg, sensor_msgs::image_encodings::TYPE_16UC1);
-                latest_depth_ = cv_ptr->image.clone();
+            if (depth_msg->encoding == sensor_msgs::image_encodings::TYPE_16UC1 || depth_msg->encoding == "16UC1") {
+                cv_bridge::CvImageConstPtr depth_ptr =
+                    cv_bridge::toCvShare(depth_msg, sensor_msgs::image_encodings::TYPE_16UC1);
+                latest_depth_ = depth_ptr->image.clone();
                 latest_depth_encoding_ = sensor_msgs::image_encodings::TYPE_16UC1;
-                latest_depth_stamp_ = msg->header.stamp;
+                latest_depth_stamp_ = depth_msg->header.stamp;
                 has_depth_ = true;
-                return;
-            }
-
-            if (msg->encoding == sensor_msgs::image_encodings::TYPE_32FC1 || msg->encoding == "32FC1") {
-                cv_bridge::CvImageConstPtr cv_ptr =
-                    cv_bridge::toCvShare(msg, sensor_msgs::image_encodings::TYPE_32FC1);
-                latest_depth_ = cv_ptr->image.clone();
+            } else if (depth_msg->encoding == sensor_msgs::image_encodings::TYPE_32FC1 ||
+                       depth_msg->encoding == "32FC1") {
+                cv_bridge::CvImageConstPtr depth_ptr =
+                    cv_bridge::toCvShare(depth_msg, sensor_msgs::image_encodings::TYPE_32FC1);
+                latest_depth_ = depth_ptr->image.clone();
                 latest_depth_encoding_ = sensor_msgs::image_encodings::TYPE_32FC1;
-                latest_depth_stamp_ = msg->header.stamp;
+                latest_depth_stamp_ = depth_msg->header.stamp;
                 has_depth_ = true;
+            } else {
+                has_depth_ = false;
+                ROS_WARN_THROTTLE(2.0, "Unsupported depth encoding: %s", depth_msg->encoding.c_str());
                 return;
             }
-
-            has_depth_ = false;
-            ROS_WARN_THROTTLE(2.0, "Unsupported depth encoding: %s", msg->encoding.c_str());
         } catch (const cv_bridge::Exception& e) {
             has_depth_ = false;
             ROS_WARN_THROTTLE(2.0, "Depth cv_bridge error: %s", e.what());
-        }
-    }
-
-    void colorCallback(const sensor_msgs::ImageConstPtr& msg) {
-        // Guardrails: only process frames when intrinsics + fresh depth are available.
-        if (!has_camera_model_) {
-            ROS_WARN_THROTTLE(2.0, "Waiting for camera_info before processing RGB frames");
-            return;
-        }
-
-        if (!has_depth_) {
-            ROS_WARN_THROTTLE(2.0, "Waiting for depth frames");
-            return;
-        }
-
-        if (std::fabs((msg->header.stamp - latest_depth_stamp_).toSec()) > max_depth_age_sec_) {
-            ROS_WARN_THROTTLE(2.0, "Depth too old compared to RGB frame");
             return;
         }
 
         cv_bridge::CvImageConstPtr cv_ptr;
         try {
-            cv_ptr = cv_bridge::toCvShare(msg, sensor_msgs::image_encodings::BGR8);
+            cv_ptr = cv_bridge::toCvShare(color_msg, sensor_msgs::image_encodings::BGR8);
         } catch (const cv_bridge::Exception& e) {
             ROS_WARN_THROTTLE(2.0, "Color cv_bridge error: %s", e.what());
             return;
@@ -389,7 +388,7 @@ private:
 
             // Transform camera-frame point into robot base frame for downstream nodes.
             geometry_msgs::Point p_base;
-            if (!projectAndTransformToBase(det.u, det.v, depth_m, msg->header, p_base)) {
+            if (!projectAndTransformToBase(det.u, det.v, depth_m, color_msg->header, p_base)) {
                 continue;
             }
 
@@ -403,7 +402,7 @@ private:
             p_base = applyEmaSmoothing(cfg.id, p_base);
 
             memory_game::Block block;
-            block.header.stamp = msg->header.stamp;
+            block.header.stamp = color_msg->header.stamp;
             block.header.frame_id = target_frame_;
             block.id = cfg.id;
             block.color = cfg.name;
@@ -432,14 +431,14 @@ private:
             return a.id < b.id;
         });
 
-        publishBlocks(blocks, msg->header.stamp);
-        publishMarkers(blocks, msg->header.stamp);
+        publishBlocks(blocks, color_msg->header.stamp);
+        publishMarkers(blocks, color_msg->header.stamp);
 
         if (enable_player_detection_) {
             geometry_msgs::Point hand_base;
-            if (detectHandInBase(msg->header, skin_mask, hand_base)) {
+            if (detectHandInBase(color_msg->header, skin_mask, hand_base)) {
                 if (!blocks.empty()) {
-                    tryPublishPlayerSelection(blocks, hand_base, msg->header);
+                    tryPublishPlayerSelection(blocks, hand_base, color_msg->header);
                 } else {
                     resetSelectionTrackingForHandPresent();
                 }
@@ -449,7 +448,7 @@ private:
         }
 
         if (publish_debug_images) {
-            publishDebugImages(debug_mask_accum, debug_overlay, msg->header);
+            publishDebugImages(debug_mask_accum, debug_overlay, color_msg->header);
         }
 
         ROS_DEBUG_THROTTLE(1.0, "Published %zu detected blocks", blocks.size());
@@ -840,9 +839,13 @@ private:
 
     image_transport::ImageTransport it_;
 
-    ros::Subscriber color_sub_;
-    ros::Subscriber depth_sub_;
+    using RgbDepthSyncPolicy =
+        message_filters::sync_policies::ApproximateTime<sensor_msgs::Image, sensor_msgs::Image>;
+
+    message_filters::Subscriber<sensor_msgs::Image> color_sub_;
+    message_filters::Subscriber<sensor_msgs::Image> depth_sub_;
     ros::Subscriber camera_info_sub_;
+    std::unique_ptr<message_filters::Synchronizer<RgbDepthSyncPolicy> > rgb_depth_sync_;
 
     ros::Publisher blocks_pub_;
     ros::Publisher markers_pub_;
@@ -882,6 +885,7 @@ private:
     double min_depth_m_;
     double max_depth_m_;
     double max_depth_age_sec_;
+    int sync_queue_size_;
 
     double marker_size_m_;
     bool enable_debug_images_;
