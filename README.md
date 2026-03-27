@@ -158,6 +158,62 @@ These are the main issues we actually hit while integrating in the lab:
 - The original plan and some old docs did not match the final architecture.
   - The repo now keeps the plan as historical context, not as the current source of truth.
 
+## Current Project Status
+
+Current practical state of the system:
+
+- block detection is usable in the current 3-color lab path
+- game logic is integrated with real detected blocks
+- real motion works through `motion_moveit_node` on the Panda lab setup
+- the current working MoveIt group on the lab robot is `arm`
+
+What is still not closed:
+
+- red is still unreliable in the real scene
+- hand-based player selection is still being hardened
+- UI/operator tooling is separate from the core ROS nodes and not part of the main robot path yet
+
+So the system is no longer blocked on architecture or motion wiring. The remaining work is mainly perception reliability.
+
+## Current Lab Commands
+
+These are the practical commands for the current lab path:
+
+### Motion
+
+```bash
+rosrun memory_game motion_moveit_node _planning_group:=arm
+```
+
+### Vision
+
+```bash
+rosrun memory_game vision_node \
+  _disable_red:=true \
+  _max_depth_age_sec:=1.0 \
+  _depth_buffer_size:=10 \
+  _enable_player_detection:=true \
+  _selection_hold_sec:=1.0 \
+  _selection_cooldown_sec:=1.0 \
+  _max_select_distance_px:=90 \
+  _min_hand_area:=200 \
+  _require_hand_release:=false \
+  _workspace_enable:=false \
+  _roi_enable:=false \
+  _min_block_area:=500 \
+  _mask_open_iterations:=2 \
+  _mask_close_iterations:=2
+```
+
+### Game
+
+```bash
+rosrun memory_game game_node \
+  _disable_red:=true \
+  _require_detected_blocks:=true \
+  _min_detected_blocks_required:=3
+```
+
 ## Troubleshooting
 
 - Package not found:

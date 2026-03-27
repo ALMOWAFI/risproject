@@ -1,15 +1,60 @@
-# Task Breakdown - Historical Planning Note
+# Task Breakdown - Historical Plan + Current Status
 
-This file is kept only as a record of the original planning phase.
+This file started as the original planning note. The project later changed during implementation and lab integration, especially in motion, vision reliability, and how the system is actually run in the lab.
 
-It is not the current source of truth for the repo anymore. The project changed during implementation and lab integration, especially around motion and launch workflow.
+So this file now serves two purposes:
 
-Use these files instead when you want the current picture:
+- preserve the original task plan for reference
+- record the current status of the real system
+
+For the most current operational picture, also use:
 
 - `README.md`
 - `ROS1_GUIDE.md`
 - `docs/architecture.md`
 - `newmotion/MOTION_RUNBOOK.md`
+
+## Current Status Snapshot
+
+### What is working
+
+- `vision_node` publishes usable `/detected_blocks` for the stable 3-color path
+- `game_node` can run with detected blocks and no longer requires all 4 colors to start
+- `motion_moveit_node` works on the lab Panda setup when run with:
+  - `_planning_group:=arm`
+- `game_node` -> `/target_block` -> `motion_moveit_node` integration works
+- score and game state are already published by `game_node`
+
+### What is intentionally simplified right now
+
+- red is treated as unstable in the lab setup
+- the practical working path is currently 3-color mode
+- `motion_node` remains only a demo/debug node
+
+### What is still open
+
+- robust red detection on the real table
+- fully reliable hand-based `/player_selection`
+- operator UI wiring and process control
+
+### Main integration issues we actually hit
+
+- wrong RealSense topic names at first
+- depth/RGB pairing problems
+- red false positives from background or brown objects
+- hand skin tones confusing red detection
+- stale block positions in game logic
+- unsafe fallback target behavior in the game node
+- mismatch between expected robot motion interface and the real Panda MoveIt setup
+
+### Current practical priority order
+
+1. Keep the 3-color system reliable
+2. Keep game/motion integration stable on the robot
+3. Improve player selection
+4. Reintroduce red only after it is trustworthy
+
+---
 
 Below this note, the old planning text is preserved for reference only.
 

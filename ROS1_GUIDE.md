@@ -107,7 +107,7 @@ bash newmotion/probe_motion_interface.sh
 Use:
 
 ```bash
-rosrun memory_game motion_moveit_node
+rosrun memory_game motion_moveit_node _planning_group:=arm
 ```
 
 ### 3. If the lab stack exposes a pose command topic
@@ -150,6 +150,55 @@ Current meaning:
 - The Panda lab stack may not accept a simple pose topic. Probe first with `bash newmotion/probe_motion_interface.sh` before assuming which motion node to run.
 - `motion_node` is only for demo/RViz. For real robot work, use `motion_moveit_node` or `motion_hw_node` depending on the actual lab interface.
 - If `rostopic echo` says it cannot load `memory_game/...` messages, rebuild and source the workspace again.
+
+## Current Tested Lab Commands
+
+These are the commands that match the current practical lab setup.
+
+### Motion
+
+```bash
+rosrun memory_game motion_moveit_node _planning_group:=arm
+```
+
+### Vision
+
+```bash
+rosrun memory_game vision_node \
+  _disable_red:=true \
+  _max_depth_age_sec:=1.0 \
+  _depth_buffer_size:=10 \
+  _enable_player_detection:=true \
+  _selection_hold_sec:=1.0 \
+  _selection_cooldown_sec:=1.0 \
+  _max_select_distance_px:=90 \
+  _min_hand_area:=200 \
+  _require_hand_release:=false \
+  _workspace_enable:=false \
+  _roi_enable:=false \
+  _min_block_area:=500 \
+  _mask_open_iterations:=2 \
+  _mask_close_iterations:=2
+```
+
+### Game
+
+```bash
+rosrun memory_game game_node \
+  _disable_red:=true \
+  _require_detected_blocks:=true \
+  _min_detected_blocks_required:=3
+```
+
+### Useful checks while running
+
+```bash
+rostopic echo -n1 /detected_blocks
+rostopic echo /player_selection
+rostopic echo /motion_status
+rostopic echo /game_state
+rostopic echo /score
+```
 
 ## Common Problems
 

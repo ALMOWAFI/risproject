@@ -145,7 +145,7 @@ private:
         pnh_.param("no_immediate_repeat", no_immediate_repeat_, true);
         pnh_.param("target_frame", target_frame_, std::string("panda_link0"));
         pnh_.param("require_detected_blocks", require_detected_blocks_, true);
-        pnh_.param("disable_red", disable_red_, false);
+        pnh_.param("disable_red", disable_red_, true);
         pnh_.param("min_detected_blocks_required", min_detected_blocks_required_, 3);
         pnh_.param("blocks_wait_sec", blocks_wait_sec_, 0.5);
         pnh_.param("block_freshness_sec", block_freshness_sec_, 0.20);

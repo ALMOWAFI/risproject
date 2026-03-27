@@ -15,7 +15,7 @@ game_node:
   default_x: 0.40
   default_y: 0.00
   default_z: 0.05
-  disable_red: false
+  disable_red: true
   require_detected_blocks: true
   min_detected_blocks_required: 3
   blocks_wait_sec: 0.5
@@ -31,7 +31,7 @@ vision_node:
   camera_info_topic: "/realsense/color/camera_info"
   target_frame: "panda_link0"
   markers_topic: "/vision/visualization_marker_array"
-  disable_red: false
+  disable_red: true
 
 
   # Optional ROI filter (pixel coords in the color image). Use this to ignore background.
@@ -69,18 +69,18 @@ vision_node:
 
   # Player selection (real hand detection)
   enable_player_detection: true
-  max_select_distance_m: 0.12   # hand within this distance of block (meters)
+  max_select_distance_px: 90    # hand contour must be this close to a block centroid (pixels)
   selection_cooldown_sec: 1.0   # min time between selections
-  selection_hold_sec: 3.0       # hand must stay on same block this long before selection
-  min_hand_area: 500            # min skin blob area (pixels)
+  selection_hold_sec: 1.0       # hand must stay on same block this long before selection
+  min_hand_area: 200            # min skin blob area (pixels)
   max_hand_area: 200000         # max skin blob area (pixels)
-  require_hand_release: true
+  require_hand_release: false
   exclude_skin_from_block_masks: true
   skin_mask_open_iterations: 1
   skin_mask_close_iterations: 1
   skin_hsv_ranges:
-    - [0, 15, 40, 255, 40, 255]
-    - [165, 180, 40, 255, 40, 255]
+    - [0, 25, 20, 255, 30, 255]
+    - [165, 180, 20, 255, 30, 255]
 
   # HSV ranges format: [hmin, hmax, smin, smax, vmin, vmax]
   hsv_ranges:
