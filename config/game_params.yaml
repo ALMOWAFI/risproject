@@ -51,16 +51,16 @@ vision_node:
   workspace_max_z: 10.0
   
   # Contour filtering and mask cleanup
-  min_block_area: 300       # pixels
+  min_block_area: 500       # pixels
   max_block_area: 60000     # pixels
-  mask_open_iterations: 1
+  mask_open_iterations: 2
   mask_close_iterations: 2
 
   # Depth robustness
   depth_window_radius: 2    # median window radius in pixels
   min_depth_m: 0.10
   max_depth_m: 2.50
-  max_depth_age_sec: 0.25   # max age difference RGB-depth
+  max_depth_age_sec: 1.0    # max age difference RGB-depth
 
   # Output behavior
   marker_size_m: 0.05
@@ -69,18 +69,18 @@ vision_node:
 
   # Player selection (real hand detection)
   enable_player_detection: true
-  max_select_distance_px: 90    # hand contour must be this close to a block centroid (pixels)
+  max_select_distance_m: 0.12   # hand within this distance of block (meters)
   selection_cooldown_sec: 1.0   # min time between selections
-  selection_hold_sec: 1.0       # hand must stay on same block this long before selection
-  min_hand_area: 200            # min skin blob area (pixels)
+  selection_hold_sec: 3.0       # hand must stay on same block this long before selection
+  min_hand_area: 500            # min skin blob area (pixels)
   max_hand_area: 200000         # max skin blob area (pixels)
-  require_hand_release: false
+  require_hand_release: true
   exclude_skin_from_block_masks: true
   skin_mask_open_iterations: 1
   skin_mask_close_iterations: 1
   skin_hsv_ranges:
-    - [0, 25, 20, 255, 30, 255]
-    - [165, 180, 20, 255, 30, 255]
+    - [0, 15, 40, 255, 40, 255]
+    - [165, 180, 40, 255, 40, 255]
 
   # HSV ranges format: [hmin, hmax, smin, smax, vmin, vmax]
   hsv_ranges:

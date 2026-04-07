@@ -5,7 +5,7 @@
  * This node detects colored blocks from RGB + depth streams and publishes:
  *   - /detected_blocks (memory_game/BlockArray)
  *   - /visualization_marker_array (visualization_msgs/MarkerArray)
- *   - /player_selection (memory_game/PlayerSelection) when a hand contour stays near a block
+ *   - /player_selection (memory_game/PlayerSelection) when hand is near a block
  *
  * Core pipeline:
  *   1) RGB BGR -> HSV conversion
@@ -15,7 +15,6 @@
  *   5) Pixel+depth -> 3D camera point via camera intrinsics
  *   6) Camera frame -> robot base frame transform via TF
  *   7) Optional EMA smoothing for stable positions
- *   8) Hand-mask contour proximity for player selection
  */
 
 #include <algorithm>
@@ -71,17 +70,6 @@ struct DetectionResult {
     int v = 0;
     double area = 0.0;
     cv::Mat mask;
-};
-
-struct FrameBlockDetection {
-    memory_game::Block block;
-    int u = 0;
-    int v = 0;
-};
-
-struct HandDetection {
-    std::vector<cv::Point> contour;
-    cv::Point centroid;
 };
 
 std_msgs::ColorRGBA MakeColor(float r, float g, float b, float a = 1.0f) {
@@ -165,15 +153,15 @@ private:
         pnh_.param("workspace_min_z", workspace_min_z_, -10.0);
         pnh_.param("workspace_max_z", workspace_max_z_, 10.0);
 
-        pnh_.param("min_block_area", min_block_area_, 300.0);
+        pnh_.param("min_block_area", min_block_area_, 500.0);
         pnh_.param("max_block_area", max_block_area_, 60000.0);
-        pnh_.param("mask_open_iterations", mask_open_iterations_, 1);
+        pnh_.param("mask_open_iterations", mask_open_iterations_, 2);
         pnh_.param("mask_close_iterations", mask_close_iterations_, 2);
 
         pnh_.param("depth_window_radius", depth_window_radius_, 2);
         pnh_.param("min_depth_m", min_depth_m_, 0.10);
         pnh_.param("max_depth_m", max_depth_m_, 2.50);
-        pnh_.param("max_depth_age_sec", max_depth_age_sec_, 0.25);
+        pnh_.param("max_depth_age_sec", max_depth_age_sec_, 1.0);
         pnh_.param("depth_buffer_size", depth_buffer_size_, 10);
 
         pnh_.param("marker_size_m", marker_size_m_, 0.05);
@@ -181,12 +169,12 @@ private:
         pnh_.param("smoothing_alpha", smoothing_alpha_, 0.35);
 
         pnh_.param("enable_player_detection", enable_player_detection_, true);
-        pnh_.param("max_select_distance_px", max_select_distance_px_, 90.0);
+        pnh_.param("max_select_distance_m", max_select_distance_m_, 0.12);
         pnh_.param("selection_cooldown_sec", selection_cooldown_sec_, 1.0);
-        pnh_.param("min_hand_area", min_hand_area_, 200.0);
+        pnh_.param("min_hand_area", min_hand_area_, 500.0);
         pnh_.param("max_hand_area", max_hand_area_, 200000.0);
-        pnh_.param("selection_hold_sec", selection_hold_sec_, 1.0);
-        pnh_.param("require_hand_release", require_hand_release_, false);
+        pnh_.param("selection_hold_sec", selection_hold_sec_, 3.0);
+        pnh_.param("require_hand_release", require_hand_release_, true);
         pnh_.param("exclude_skin_from_block_masks", exclude_skin_from_block_masks_, true);
         pnh_.param("skin_mask_open_iterations", skin_mask_open_iterations_, 1);
         pnh_.param("skin_mask_close_iterations", skin_mask_close_iterations_, 1);
@@ -196,7 +184,7 @@ private:
         if (depth_window_radius_ < 0) depth_window_radius_ = 0;
         depth_buffer_size_ = std::max(2, depth_buffer_size_);
         smoothing_alpha_ = std::max(0.0, std::min(1.0, smoothing_alpha_));
-        max_select_distance_px_ = std::max(1.0, max_select_distance_px_);
+        max_select_distance_m_ = std::max(0.01, max_select_distance_m_);
         selection_cooldown_sec_ = std::max(0.0, selection_cooldown_sec_);
         min_hand_area_ = std::max(50.0, min_hand_area_);
         max_hand_area_ = std::max(min_hand_area_, max_hand_area_);
@@ -236,8 +224,8 @@ private:
 
     void initDefaultSkinRanges() {
         skin_ranges_.clear();
-        skin_ranges_.push_back(HsvRange{0, 25, 20, 255, 30, 255});
-        skin_ranges_.push_back(HsvRange{165, 180, 20, 255, 30, 255});
+        skin_ranges_.push_back(HsvRange{0, 15, 40, 255, 40, 255});
+        skin_ranges_.push_back(HsvRange{165, 180, 40, 255, 40, 255});
     }
 
     void applyColorFilters() {
@@ -408,9 +396,7 @@ private:
         cv::cvtColor(cv_ptr->image, hsv, cv::COLOR_BGR2HSV);
 
         std::vector<memory_game::Block> blocks;
-        std::vector<FrameBlockDetection> frame_blocks;
         blocks.reserve(color_configs_.size());
-        frame_blocks.reserve(color_configs_.size());
 
         const bool publish_debug_images =
             enable_debug_images_ &&
@@ -423,7 +409,7 @@ private:
                                     exclude_skin_from_block_masks_ ||
                                     (enable_debug_images_ && debug_hand_mask_pub_.getNumSubscribers() > 0);
         if (need_skin_mask) {
-            skin_mask = buildSkinMask(cv_ptr->image, hsv);
+            skin_mask = buildSkinMask(hsv);
             applyRoiMask(skin_mask);
         }
 
@@ -482,7 +468,6 @@ private:
             block.is_selected = false;
 
             blocks.push_back(block);
-            frame_blocks.push_back(FrameBlockDetection{block, det.u, det.v});
 
             if (publish_debug_images) {
                 cv::circle(debug_overlay, cv::Point(det.u, det.v), 6, cv::Scalar(255, 255, 255), 2);
@@ -505,16 +490,10 @@ private:
         publishMarkers(blocks, color_msg->header.stamp);
 
         if (enable_player_detection_) {
-            HandDetection hand;
-            if (detectHandContour(skin_mask, hand)) {
-                if (publish_debug_images) {
-                    cv::drawContours(debug_overlay, std::vector<std::vector<cv::Point> >(1, hand.contour), -1,
-                                     cv::Scalar(0, 255, 255), 2);
-                    cv::circle(debug_overlay, hand.centroid, 5, cv::Scalar(0, 255, 255), -1);
-                }
-
-                if (!frame_blocks.empty()) {
-                    tryPublishPlayerSelection(frame_blocks, hand, color_msg->header);
+            geometry_msgs::Point hand_base;
+            if (detectHandInBase(color_msg->header, skin_mask, hand_base)) {
+                if (!blocks.empty()) {
+                    tryPublishPlayerSelection(blocks, hand_base, color_msg->header);
                 } else {
                     resetSelectionTrackingForHandPresent();
                 }
@@ -530,7 +509,9 @@ private:
         ROS_DEBUG_THROTTLE(1.0, "Published %zu detected blocks", blocks.size());
     }
 
-    bool detectHandContour(const cv::Mat& skin_mask, HandDetection& hand) {
+    bool detectHandInBase(const std_msgs::Header& header,
+                          const cv::Mat& skin_mask,
+                          geometry_msgs::Point& hand_base) {
         std::vector<std::vector<cv::Point> > contours;
         cv::findContours(skin_mask, contours, cv::RETR_EXTERNAL, cv::CHAIN_APPROX_SIMPLE);
 
@@ -554,43 +535,42 @@ private:
         if (m.m00 <= 1e-6) {
             return false;
         }
-        hand.contour = contours[best_idx];
-        hand.centroid.x = static_cast<int>(m.m10 / m.m00);
-        hand.centroid.y = static_cast<int>(m.m01 / m.m00);
-        return true;
+        const int u = static_cast<int>(m.m10 / m.m00);
+        const int v = static_cast<int>(m.m01 / m.m00);
+
+        double depth_m = 0.0;
+        if (!readDepthMedianMeters(u, v, depth_m)) {
+            return false;
+        }
+        return projectAndTransformToBase(u, v, depth_m, header, hand_base);
     }
 
-    void tryPublishPlayerSelection(const std::vector<FrameBlockDetection>& blocks,
-                                    const HandDetection& hand,
+    void tryPublishPlayerSelection(const std::vector<memory_game::Block>& blocks,
+                                    const geometry_msgs::Point& hand_base,
                                     const std_msgs::Header& header) {
         const ros::Time now = ros::Time::now();
         const bool cooldown_ok = (now - last_selection_time_).toSec() >= selection_cooldown_sec_;
 
         int best_id = -1;
-        double best_dist_px = max_select_distance_px_ + 1.0;
+        double best_dist = max_select_distance_m_ + 1.0;
         std::string best_color;
 
-        for (const FrameBlockDetection& b : blocks) {
-            const double signed_dist = cv::pointPolygonTest(
-                hand.contour,
-                cv::Point2f(static_cast<float>(b.u), static_cast<float>(b.v)),
-                true);
-            const double dist_px = signed_dist >= 0.0 ? 0.0 : -signed_dist;
-            if (dist_px < best_dist_px) {
-                best_dist_px = dist_px;
-                best_id = b.block.id;
-                best_color = b.block.color;
+        for (const memory_game::Block& b : blocks) {
+            const double dx = hand_base.x - b.position.x;
+            const double dy = hand_base.y - b.position.y;
+            const double dz = hand_base.z - b.position.z;
+            const double d = std::sqrt(dx * dx + dy * dy + dz * dz);
+            if (d < best_dist) {
+                best_dist = d;
+                best_id = b.id;
+                best_color = b.color;
             }
         }
 
-        if (best_id < 0 || best_dist_px > max_select_distance_px_) {
+        if (best_id < 0 || best_dist > max_select_distance_m_) {
             stable_candidate_id_ = -1;
             stable_candidate_since_ = ros::Time(0);
             return;
-        }
-
-        if (!require_hand_release_ && best_id != last_selected_block_id_) {
-            selection_armed_ = true;
         }
 
         if (best_id != stable_candidate_id_) {
@@ -617,14 +597,16 @@ private:
         sel.color = best_color;
         sel.selection_type = "pointed";
         sel.selection_time = now;
-        sel.confidence = static_cast<float>(1.0 - best_dist_px / max_select_distance_px_);
+        sel.confidence = static_cast<float>(1.0 - best_dist / max_select_distance_m_);
         selection_pub_.publish(sel);
 
         last_selection_time_ = now;
         last_selected_block_id_ = best_id;
         stable_candidate_id_ = -1;
         stable_candidate_since_ = ros::Time(0);
-        selection_armed_ = false;
+        if (require_hand_release_) {
+            selection_armed_ = false;
+        }
         ROS_INFO_THROTTLE(0.5, "Player selection: block %d (%s)", best_id, best_color.c_str());
     }
 
@@ -636,7 +618,9 @@ private:
     void resetSelectionTrackingForNoHand() {
         stable_candidate_id_ = -1;
         stable_candidate_since_ = ros::Time(0);
-        selection_armed_ = true;
+        if (require_hand_release_) {
+            selection_armed_ = true;
+        }
     }
 
 
@@ -668,7 +652,7 @@ private:
                p.z >= workspace_min_z_ && p.z <= workspace_max_z_;
     }
 
-    cv::Mat buildSkinMask(const cv::Mat& bgr, const cv::Mat& hsv) const {
+    cv::Mat buildSkinMask(const cv::Mat& hsv) const {
         cv::Mat skin_mask = cv::Mat::zeros(hsv.size(), CV_8UC1);
         for (const HsvRange& r : skin_ranges_) {
             cv::Mat partial;
@@ -678,14 +662,6 @@ private:
                         partial);
             cv::bitwise_or(skin_mask, partial, skin_mask);
         }
-
-        // Add a YCrCb skin prior to improve recall when HSV alone misses real hands under lab lighting.
-        cv::Mat ycrcb;
-        cv::cvtColor(bgr, ycrcb, cv::COLOR_BGR2YCrCb);
-
-        cv::Mat ycrcb_mask;
-        cv::inRange(ycrcb, cv::Scalar(0, 133, 77), cv::Scalar(255, 173, 127), ycrcb_mask);
-        cv::bitwise_or(skin_mask, ycrcb_mask, skin_mask);
 
         if (skin_mask_open_iterations_ > 0) {
             cv::morphologyEx(skin_mask, skin_mask, cv::MORPH_OPEN, cv::Mat(), cv::Point(-1, -1),
@@ -1014,7 +990,7 @@ private:
     double smoothing_alpha_;
 
     bool enable_player_detection_;
-    double max_select_distance_px_;
+    double max_select_distance_m_;
     double selection_cooldown_sec_;
     double selection_hold_sec_;
     double min_hand_area_;

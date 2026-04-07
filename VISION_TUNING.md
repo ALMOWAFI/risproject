@@ -33,9 +33,9 @@ Then relaunch `vision_only.launch`.
 ## 3) Pre-Flight Checks (Do This First)
 
 ```bash
-rostopic hz /camera/color/image_raw
-rostopic hz /camera/aligned_depth_to_color/image_raw
-rostopic echo -n1 /camera/color/camera_info
+rostopic hz /realsense/color/image_raw
+rostopic hz /realsense/aligned_depth_to_color/image_raw
+rostopic echo -n1 /realsense/color/camera_info
 ```
 
 Expected:

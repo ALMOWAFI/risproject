@@ -169,11 +169,11 @@ rosrun memory_game vision_node \
   _max_depth_age_sec:=1.0 \
   _depth_buffer_size:=10 \
   _enable_player_detection:=true \
-  _selection_hold_sec:=1.0 \
+  _selection_hold_sec:=3.0 \
   _selection_cooldown_sec:=1.0 \
-  _max_select_distance_px:=90 \
-  _min_hand_area:=200 \
-  _require_hand_release:=false \
+  _max_select_distance_m:=0.12 \
+  _min_hand_area:=500 \
+  _require_hand_release:=true \
   _workspace_enable:=false \
   _roi_enable:=false \
   _min_block_area:=500 \

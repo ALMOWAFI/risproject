@@ -4,6 +4,9 @@
     <arg name="use_rviz" default="true"/>
     <arg name="use_image_view" default="false"/>
     <arg name="enable_debug_images" default="true"/>
+
+    <!-- Load tuned vision/game params used elsewhere in the repo -->
+    <rosparam file="$(find memory_game)/config/game_params.yaml" command="load"/>
     
     <!-- Vision Node -->
     <node name="vision_node" pkg="memory_game" type="vision_node" output="screen">
