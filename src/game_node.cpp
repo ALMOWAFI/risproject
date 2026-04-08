@@ -340,12 +340,13 @@ private:
                 } else {
                     const int expected_block_id = sequence_[sequence_targets_completed_];
                     if (has_block_id && completed_block_id != expected_block_id) {
-                        ROS_ERROR("Motion reached block %d but expected block %d at step %d/%d",
+                        // Could be a stale status message from a previous round still in the queue.
+                        // Ignore it rather than aborting — the real AT_TARGET will arrive shortly.
+                        ROS_WARN("AT_TARGET: got block %d but expected block %d at step %d/%d — ignoring (stale msg?)",
                                   completed_block_id,
                                   expected_block_id,
                                   sequence_targets_completed_ + 1,
                                   expected_targets);
-                        abortDueToMotionFailure();
                         return;
                     }
 
@@ -356,6 +357,23 @@ private:
                     ROS_INFO("Motion completed target %d/%d",
                              sequence_targets_completed_,
                              expected_targets);
+
+                    // One-at-a-time dispatch: send the next target now that this one is confirmed.
+                    // Using a fresh block position from vision rather than a pre-queued stale one.
+                    if (sequence_targets_completed_ < expected_targets) {
+                        const int next_block_id = sequence_[sequence_targets_completed_];
+                        memory_game::Block next_target;
+                        if (tryMakeTargetBlock(next_block_id, next_target)) {
+                            target_pub_.publish(next_target);
+                            ROS_INFO("Dispatched block %d (%d/%d)",
+                                     next_block_id,
+                                     sequence_targets_completed_ + 1,
+                                     expected_targets);
+                        } else {
+                            ROS_WARN("Block %d not fresh when needed; waiting for vision", next_block_id);
+                            waitForBlocksAndRetry("Next sequence target missing.");
+                        }
+                    }
                 }
             }
 
@@ -587,19 +605,21 @@ private:
         motion_started_for_sequence_ = false;
         sequence_sent_to_motion_ = true;
 
-        for (size_t i = 0; i < sequence_.size(); ++i) {
-            const int block_id = sequence_[i];
-            memory_game::Block target;
-            if (!tryMakeTargetBlock(block_id, target)) {
-                waitForBlocksAndRetry("Sequence target missing.");
-                return;
-            }
-            target_pub_.publish(target);
-            ROS_INFO("Queued block %d (%zu/%zu)", block_id, i + 1, sequence_.size());
+        // Dispatch only the first target. Each subsequent target is sent from motionCallback
+        // as the previous AT_TARGET confirmation arrives (one-at-a-time dispatch).
+        // This ensures every target uses a fresh block position from vision, and prevents
+        // burst-published messages from being dropped before motion subscribes.
+        const int first_block_id = sequence_[0];
+        memory_game::Block first_target;
+        if (!tryMakeTargetBlock(first_block_id, first_target)) {
+            waitForBlocksAndRetry("First sequence target missing.");
+            return;
         }
+        target_pub_.publish(first_target);
+        ROS_INFO("Dispatched block %d (1/%zu)", first_block_id, sequence_.size());
 
         if (!have_motion_state_) {
-            ROS_WARN("No /motion_status received yet after queuing sequence. Waiting for motion feedback.");
+            ROS_WARN("No /motion_status received yet. Is motion node running?");
         }
 
         const double per_target_budget_sec = std::max(2.0, show_hold_sec_ + between_show_sec_ + 1.5);

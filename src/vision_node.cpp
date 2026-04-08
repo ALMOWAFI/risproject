@@ -65,11 +65,21 @@ struct ColorConfig {
 };
 
 struct DetectionResult {
-    bool valid = false;
+    cv::Mat mask;
+    std::vector<cv::Point> centroids;
+    std::vector<double> areas;
+};
+
+struct FrameBlockDetection {
+    memory_game::Block block;
     int u = 0;
     int v = 0;
-    double area = 0.0;
-    cv::Mat mask;
+};
+
+struct HandDetection {
+    cv::Point centroid;
+    geometry_msgs::Point base;
+    bool has_base = false;
 };
 
 std_msgs::ColorRGBA MakeColor(float r, float g, float b, float a = 1.0f) {
@@ -153,6 +163,11 @@ private:
         pnh_.param("workspace_min_z", workspace_min_z_, -10.0);
         pnh_.param("workspace_max_z", workspace_max_z_, 10.0);
 
+        pnh_.param("blur_kernel_size", blur_kernel_size_, 3);
+        if (blur_kernel_size_ > 0 && blur_kernel_size_ % 2 == 0) {
+            blur_kernel_size_++;  // OpenCV requires odd kernel size
+        }
+
         pnh_.param("min_block_area", min_block_area_, 500.0);
         pnh_.param("max_block_area", max_block_area_, 60000.0);
         pnh_.param("mask_open_iterations", mask_open_iterations_, 2);
@@ -170,6 +185,7 @@ private:
 
         pnh_.param("enable_player_detection", enable_player_detection_, true);
         pnh_.param("max_select_distance_m", max_select_distance_m_, 0.12);
+        pnh_.param("max_select_distance_px_fallback", max_select_distance_px_fallback_, 90.0);
         pnh_.param("selection_cooldown_sec", selection_cooldown_sec_, 1.0);
         pnh_.param("min_hand_area", min_hand_area_, 500.0);
         pnh_.param("max_hand_area", max_hand_area_, 200000.0);
@@ -178,6 +194,10 @@ private:
         pnh_.param("exclude_skin_from_block_masks", exclude_skin_from_block_masks_, true);
         pnh_.param("skin_mask_open_iterations", skin_mask_open_iterations_, 1);
         pnh_.param("skin_mask_close_iterations", skin_mask_close_iterations_, 1);
+        pnh_.param("image_track_timeout_sec", image_track_timeout_sec_, 0.5);
+        pnh_.param("max_candidate_jump_px", max_candidate_jump_px_, 120.0);
+        pnh_.param("position_reset_timeout_sec", position_reset_timeout_sec_, 0.5);
+        pnh_.param("max_position_jump_m", max_position_jump_m_, 0.10);
 
         if (mask_open_iterations_ < 0) mask_open_iterations_ = 0;
         if (mask_close_iterations_ < 0) mask_close_iterations_ = 0;
@@ -185,12 +205,17 @@ private:
         depth_buffer_size_ = std::max(2, depth_buffer_size_);
         smoothing_alpha_ = std::max(0.0, std::min(1.0, smoothing_alpha_));
         max_select_distance_m_ = std::max(0.01, max_select_distance_m_);
+        max_select_distance_px_fallback_ = std::max(1.0, max_select_distance_px_fallback_);
         selection_cooldown_sec_ = std::max(0.0, selection_cooldown_sec_);
         min_hand_area_ = std::max(50.0, min_hand_area_);
         max_hand_area_ = std::max(min_hand_area_, max_hand_area_);
         selection_hold_sec_ = std::max(0.0, selection_hold_sec_);
         skin_mask_open_iterations_ = std::max(0, skin_mask_open_iterations_);
         skin_mask_close_iterations_ = std::max(0, skin_mask_close_iterations_);
+        image_track_timeout_sec_ = std::max(0.0, image_track_timeout_sec_);
+        max_candidate_jump_px_ = std::max(1.0, max_candidate_jump_px_);
+        position_reset_timeout_sec_ = std::max(0.0, position_reset_timeout_sec_);
+        max_position_jump_m_ = std::max(0.0, max_position_jump_m_);
 
 
         roi_x_ = std::max(0, roi_x_);
@@ -212,14 +237,14 @@ private:
             0,
             "red",
             {
-                {0, 15, 60, 255, 30, 255},
-                {165, 180, 60, 255, 30, 255},
+                {0, 15, 90, 255, 50, 255},    // raised S_min 60->90 to reject low-sat table surfaces
+                {165, 180, 90, 255, 50, 255}, // same for upper red wrap-around
             },
         });
 
         color_configs_.push_back(ColorConfig{1, "green", {{40, 85, 70, 255, 50, 255}}});
         color_configs_.push_back(ColorConfig{2, "blue", {{95, 135, 70, 255, 50, 255}}});
-        color_configs_.push_back(ColorConfig{3, "yellow", {{20, 35, 100, 255, 80, 255}}});
+        color_configs_.push_back(ColorConfig{3, "yellow", {{18, 40, 100, 255, 80, 255}}}); // widened H 20-35 -> 18-40
     }
 
     void initDefaultSkinRanges() {
@@ -392,11 +417,25 @@ private:
             return;
         }
 
+        // A small blur before HSV conversion reduces pixel-level noise from the camera sensor.
+        // Without it, edge pixels on block boundaries can have wildly wrong hues and speckle the masks.
+        cv::Mat bgr_smoothed;
+        if (blur_kernel_size_ > 1) {
+            cv::GaussianBlur(cv_ptr->image, bgr_smoothed,
+                             cv::Size(blur_kernel_size_, blur_kernel_size_), 0);
+        } else {
+            bgr_smoothed = cv_ptr->image;
+        }
         cv::Mat hsv;
-        cv::cvtColor(cv_ptr->image, hsv, cv::COLOR_BGR2HSV);
+        cv::cvtColor(bgr_smoothed, hsv, cv::COLOR_BGR2HSV);
 
         std::vector<memory_game::Block> blocks;
+        std::vector<FrameBlockDetection> frame_blocks;
         blocks.reserve(color_configs_.size());
+        frame_blocks.reserve(color_configs_.size());
+
+        const ros::Time frame_stamp = color_msg->header.stamp.isZero() ? ros::Time::now() : color_msg->header.stamp;
+        pruneTrackingState(frame_stamp);
 
         const bool publish_debug_images =
             enable_debug_images_ &&
@@ -404,13 +443,17 @@ private:
              (debug_hand_mask_pub_.getNumSubscribers() > 0) ||
              (debug_overlay_pub_.getNumSubscribers() > 0));
 
-        cv::Mat skin_mask;
-        const bool need_skin_mask = enable_player_detection_ ||
-                                    exclude_skin_from_block_masks_ ||
+        cv::Mat hand_skin_mask;
+        cv::Mat block_skin_mask;
+        const bool need_hand_skin_mask = enable_player_detection_ ||
                                     (enable_debug_images_ && debug_hand_mask_pub_.getNumSubscribers() > 0);
-        if (need_skin_mask) {
-            skin_mask = buildSkinMask(hsv);
-            applyRoiMask(skin_mask);
+        const bool use_skin_exclusion_for_blocks = exclude_skin_from_block_masks_;
+        if (need_hand_skin_mask || use_skin_exclusion_for_blocks) {
+            hand_skin_mask = buildSkinMask(hsv);
+            applyRoiMask(hand_skin_mask);
+        }
+        if (use_skin_exclusion_for_blocks) {
+            block_skin_mask = hand_skin_mask;
         }
 
         cv::Mat debug_mask_accum;
@@ -427,34 +470,61 @@ private:
 
         for (const ColorConfig& cfg : color_configs_) {
             // Per-color 2D detection in image space.
-            const DetectionResult det = detectColorBlob(hsv, cfg, skin_mask);
+            const DetectionResult det = detectColorBlob(hsv, cfg, block_skin_mask);
             if (publish_debug_images && !det.mask.empty()) {
                 cv::bitwise_or(debug_mask_accum, det.mask, debug_mask_accum);
             }
-            if (!det.valid) {
+            if (det.centroids.empty()) {
                 continue;
             }
 
-            // Convert 2D centroid to 3D camera point using robust median depth.
-            double depth_m = 0.0;
-            if (!readDepthMedianMeters(det.u, det.v, depth_m)) {
-                continue;
-            }
-
-            // Transform camera-frame point into robot base frame for downstream nodes.
+            const std::vector<int> ranked_indices = rankCandidateIndices(cfg.id, det, frame_stamp);
             geometry_msgs::Point p_base;
-            if (!projectAndTransformToBase(det.u, det.v, depth_m, color_msg->header, p_base)) {
-                continue;
+            cv::Point chosen_centroid;
+            double chosen_area = 0.0;
+            bool accepted_candidate = false;
+
+            // Try multiple valid contours for this color. If the largest blob is a bad background
+            // contour with invalid depth/workspace, we still want to fall back to the next candidate.
+            for (const int idx : ranked_indices) {
+                const cv::Point candidate = det.centroids[static_cast<size_t>(idx)];
+
+                double depth_m = 0.0;
+                if (!readDepthMedianMeters(candidate.x, candidate.y, depth_m)) {
+                    continue;
+                }
+
+                geometry_msgs::Point candidate_base;
+                if (!projectAndTransformToBase(candidate.x, candidate.y, depth_m, color_msg->header, candidate_base)) {
+                    continue;
+                }
+
+                // Reject non-finite positions — a bad TF or depth value can produce NaN/inf
+                // which would send the robot to an undefined location.
+                if (!std::isfinite(candidate_base.x) ||
+                    !std::isfinite(candidate_base.y) ||
+                    !std::isfinite(candidate_base.z)) {
+                    ROS_WARN_THROTTLE(2.0, "Rejected %s block: non-finite 3D position (%.3f, %.3f, %.3f)",
+                                      cfg.name.c_str(),
+                                      candidate_base.x, candidate_base.y, candidate_base.z);
+                    continue;
+                }
+
+                if (workspace_enable_ && !withinWorkspace(candidate_base)) {
+                    continue;
+                }
+
+                p_base = applyEmaSmoothing(cfg.id, candidate_base, frame_stamp);
+                chosen_centroid = candidate;
+                chosen_area = det.areas[static_cast<size_t>(idx)];
+                accepted_candidate = true;
+                rememberImageCentroid(cfg.id, candidate, frame_stamp);
+                break;
             }
 
-            // EMA helps reduce jitter in published block coordinates.
-
-            if (workspace_enable_ && !withinWorkspace(p_base)) {
+            if (!accepted_candidate) {
                 continue;
             }
-
-            // EMA helps reduce jitter in published block coordinates.
-            p_base = applyEmaSmoothing(cfg.id, p_base);
 
             memory_game::Block block;
             block.header.stamp = color_msg->header.stamp;
@@ -464,16 +534,17 @@ private:
             block.position = p_base;
             block.orientation.w = 1.0;
             block.confidence = static_cast<float>(
-                std::min(1.0, det.area / std::max(1.0, min_block_area_ * 8.0)));
+                std::min(1.0, chosen_area / std::max(1.0, min_block_area_ * 8.0)));
             block.is_selected = false;
 
             blocks.push_back(block);
+            frame_blocks.push_back(FrameBlockDetection{block, chosen_centroid.x, chosen_centroid.y});
 
             if (publish_debug_images) {
-                cv::circle(debug_overlay, cv::Point(det.u, det.v), 6, cv::Scalar(255, 255, 255), 2);
+                cv::circle(debug_overlay, chosen_centroid, 6, cv::Scalar(255, 255, 255), 2);
                 cv::putText(debug_overlay,
                             cfg.name,
-                            cv::Point(det.u + 8, det.v - 8),
+                            cv::Point(chosen_centroid.x + 8, chosen_centroid.y - 8),
                             cv::FONT_HERSHEY_SIMPLEX,
                             0.5,
                             cv::Scalar(255, 255, 255),
@@ -490,10 +561,14 @@ private:
         publishMarkers(blocks, color_msg->header.stamp);
 
         if (enable_player_detection_) {
-            geometry_msgs::Point hand_base;
-            if (detectHandInBase(color_msg->header, skin_mask, hand_base)) {
-                if (!blocks.empty()) {
-                    tryPublishPlayerSelection(blocks, hand_base, color_msg->header);
+            HandDetection hand;
+            if (detectHand(color_msg->header, hand_skin_mask, frame_blocks, hand)) {
+                if (publish_debug_images) {
+                    cv::circle(debug_overlay, hand.centroid, 5, cv::Scalar(0, 255, 255), -1);
+                }
+
+                if (!frame_blocks.empty()) {
+                    tryPublishPlayerSelection(frame_blocks, hand, color_msg->header);
                 } else {
                     resetSelectionTrackingForHandPresent();
                 }
@@ -503,73 +578,132 @@ private:
         }
 
         if (publish_debug_images) {
-            publishDebugImages(debug_mask_accum, skin_mask, debug_overlay, color_msg->header);
+            publishDebugImages(debug_mask_accum, hand_skin_mask, debug_overlay, color_msg->header);
         }
 
         ROS_DEBUG_THROTTLE(1.0, "Published %zu detected blocks", blocks.size());
     }
 
-    bool detectHandInBase(const std_msgs::Header& header,
-                          const cv::Mat& skin_mask,
-                          geometry_msgs::Point& hand_base) {
+    bool detectHand(const std_msgs::Header& header,
+                    const cv::Mat& skin_mask,
+                    const std::vector<FrameBlockDetection>& known_blocks,
+                    HandDetection& hand) {
         std::vector<std::vector<cv::Point> > contours;
         cv::findContours(skin_mask, contours, cv::RETR_EXTERNAL, cv::CHAIN_APPROX_SIMPLE);
 
-        int best_idx = -1;
-        double best_area = 0.0;
+        // Collect valid-area skin blobs and their centroids.
+        struct Candidate {
+            int contour_idx;
+            cv::Point centroid;
+            double area;
+        };
+        std::vector<Candidate> candidates;
         for (size_t i = 0; i < contours.size(); ++i) {
             const double area = cv::contourArea(contours[i]);
             if (area < min_hand_area_ || area > max_hand_area_) {
                 continue;
             }
-            if (area > best_area) {
-                best_area = area;
-                best_idx = static_cast<int>(i);
+            const cv::Moments m = cv::moments(contours[i]);
+            if (m.m00 <= 1e-6) {
+                continue;
+            }
+            candidates.push_back(Candidate{
+                static_cast<int>(i),
+                cv::Point(static_cast<int>(m.m10 / m.m00), static_cast<int>(m.m01 / m.m00)),
+                area});
+        }
+
+        if (candidates.empty()) {
+            return false;
+        }
+
+        int best_idx = -1;
+        if (!known_blocks.empty()) {
+            // Prefer the skin blob whose centroid is closest to any detected block.
+            // In a real lab the arm/shoulder is a larger skin blob but it's far from the blocks.
+            // The hand reaching toward a block will have its centroid near the block centroid.
+            double best_dist = std::numeric_limits<double>::max();
+            for (size_t i = 0; i < candidates.size(); ++i) {
+                for (const FrameBlockDetection& b : known_blocks) {
+                    const double dx = candidates[i].centroid.x - b.u;
+                    const double dy = candidates[i].centroid.y - b.v;
+                    const double dist = std::sqrt(dx * dx + dy * dy);
+                    if (dist < best_dist) {
+                        best_dist = dist;
+                        best_idx = static_cast<int>(i);
+                    }
+                }
+            }
+        } else {
+            // No block detections available — fall back to largest skin blob.
+            double best_area = 0.0;
+            for (size_t i = 0; i < candidates.size(); ++i) {
+                if (candidates[i].area > best_area) {
+                    best_area = candidates[i].area;
+                    best_idx = static_cast<int>(i);
+                }
             }
         }
+
         if (best_idx < 0) {
             return false;
         }
 
-        const cv::Moments m = cv::moments(contours[best_idx]);
-        if (m.m00 <= 1e-6) {
-            return false;
-        }
-        const int u = static_cast<int>(m.m10 / m.m00);
-        const int v = static_cast<int>(m.m01 / m.m00);
+        // Centroid already computed when building candidates.
+        hand.centroid = candidates[static_cast<size_t>(best_idx)].centroid;
+        const int u = hand.centroid.x;
+        const int v = hand.centroid.y;
 
         double depth_m = 0.0;
         if (!readDepthMedianMeters(u, v, depth_m)) {
-            return false;
+            return true;
         }
-        return projectAndTransformToBase(u, v, depth_m, header, hand_base);
+        hand.has_base = projectAndTransformToBase(u, v, depth_m, header, hand.base);
+        return true;
     }
 
-    void tryPublishPlayerSelection(const std::vector<memory_game::Block>& blocks,
-                                    const geometry_msgs::Point& hand_base,
-                                    const std_msgs::Header& header) {
+    void tryPublishPlayerSelection(const std::vector<FrameBlockDetection>& blocks,
+                                   const HandDetection& hand,
+                                   const std_msgs::Header& header) {
         const ros::Time now = ros::Time::now();
         const bool cooldown_ok = (now - last_selection_time_).toSec() >= selection_cooldown_sec_;
 
         int best_id = -1;
-        double best_dist = max_select_distance_m_ + 1.0;
+        double best_metric = hand.has_base ? (max_select_distance_m_ + 1.0) : (max_select_distance_px_fallback_ + 1.0);
         std::string best_color;
+        std::string selection_type = hand.has_base ? "pointed_3d" : "pointed_2d";
 
-        for (const memory_game::Block& b : blocks) {
-            const double dx = hand_base.x - b.position.x;
-            const double dy = hand_base.y - b.position.y;
-            const double dz = hand_base.z - b.position.z;
-            const double d = std::sqrt(dx * dx + dy * dy + dz * dz);
-            if (d < best_dist) {
-                best_dist = d;
-                best_id = b.id;
-                best_color = b.color;
+        for (const FrameBlockDetection& b : blocks) {
+            double metric = 0.0;
+            if (hand.has_base) {
+                const double dx = hand.base.x - b.block.position.x;
+                const double dy = hand.base.y - b.block.position.y;
+                const double dz = hand.base.z - b.block.position.z;
+                metric = std::sqrt(dx * dx + dy * dy + dz * dz);
+            } else {
+                const double dx = static_cast<double>(hand.centroid.x - b.u);
+                const double dy = static_cast<double>(hand.centroid.y - b.v);
+                metric = std::sqrt(dx * dx + dy * dy);
+            }
+
+            if (metric < best_metric) {
+                best_metric = metric;
+                best_id = b.block.id;
+                best_color = b.block.color;
             }
         }
 
-        if (best_id < 0 || best_dist > max_select_distance_m_) {
+        const bool selection_within_gate =
+            hand.has_base ? (best_metric <= max_select_distance_m_) : (best_metric <= max_select_distance_px_fallback_);
+        if (best_id < 0 || !selection_within_gate) {
             stable_candidate_id_ = -1;
             stable_candidate_since_ = ros::Time(0);
+            // Hand is visible but not near any block — treat this as a "release".
+            // Without this, the player must wave their hand fully out of the camera view
+            // to re-arm after a selection, which is unnatural and confusing.
+            if (require_hand_release_) {
+                selection_armed_ = true;
+            }
             return;
         }
 
@@ -595,9 +729,13 @@ private:
         sel.header.frame_id = target_frame_;
         sel.block_id = best_id;
         sel.color = best_color;
-        sel.selection_type = "pointed";
+        sel.selection_type = selection_type;
         sel.selection_time = now;
-        sel.confidence = static_cast<float>(1.0 - best_dist / max_select_distance_m_);
+        if (hand.has_base) {
+            sel.confidence = static_cast<float>(1.0 - best_metric / max_select_distance_m_);
+        } else {
+            sel.confidence = static_cast<float>(1.0 - best_metric / max_select_distance_px_fallback_);
+        }
         selection_pub_.publish(sel);
 
         last_selection_time_ = now;
@@ -690,22 +828,25 @@ private:
             cv::bitwise_or(mask, partial, mask);
         }
 
-        if (mask_open_iterations_ > 0) {
-            cv::morphologyEx(mask, mask, cv::MORPH_OPEN, cv::Mat(), cv::Point(-1, -1), mask_open_iterations_);
-        }
-        if (mask_close_iterations_ > 0) {
-            cv::morphologyEx(mask, mask, cv::MORPH_CLOSE, cv::Mat(), cv::Point(-1, -1), mask_close_iterations_);
-        }
-
-        // Keep only the largest contour in valid area bounds for this color.
-
+        // 1. Crop to ROI first — no point doing morph on pixels we will throw away,
+        //    and blobs straddling the ROI boundary would get incorrect morph results.
         applyRoiMask(mask);
 
+        // 2. Remove skin-colored pixels before morphological ops so they don't get
+        //    merged into block blobs by dilation.
         if (exclude_skin_from_block_masks_ && !skin_mask.empty()) {
             mask.setTo(0, skin_mask);
         }
 
-        // Keep only the largest contour in valid area bounds for this color.
+        // 3. CLOSE first: fills glare spots, shadows, and occlusion holes inside the block.
+        //    Doing open first would erode a block with a hole into two fragments, then fail area filter.
+        if (mask_close_iterations_ > 0) {
+            cv::morphologyEx(mask, mask, cv::MORPH_CLOSE, cv::Mat(), cv::Point(-1, -1), mask_close_iterations_);
+        }
+        // 4. OPEN second: removes small isolated noise blobs that survived after closing.
+        if (mask_open_iterations_ > 0) {
+            cv::morphologyEx(mask, mask, cv::MORPH_OPEN, cv::Mat(), cv::Point(-1, -1), mask_open_iterations_);
+        }
         std::vector<std::vector<cv::Point> > contours;
         cv::findContours(mask, contours, cv::RETR_EXTERNAL, cv::CHAIN_APPROX_SIMPLE);
 
@@ -716,26 +857,26 @@ private:
             if (area < min_block_area_ || area > max_block_area_) {
                 continue;
             }
+
+            const cv::Moments m = cv::moments(contours[i]);
+            if (m.m00 <= 1e-6) {
+                continue;
+            }
+
+            out.centroids.push_back(cv::Point(static_cast<int>(m.m10 / m.m00),
+                                              static_cast<int>(m.m01 / m.m00)));
+            out.areas.push_back(area);
             if (area > best_area) {
                 best_area = area;
-                best_idx = static_cast<int>(i);
+                best_idx = static_cast<int>(out.areas.size()) - 1;
             }
         }
 
         out.mask = mask;
-        if (best_idx < 0) {
-            return out;
+        if (best_idx > 0) {
+            std::swap(out.centroids[0], out.centroids[static_cast<size_t>(best_idx)]);
+            std::swap(out.areas[0], out.areas[static_cast<size_t>(best_idx)]);
         }
-
-        const cv::Moments m = cv::moments(contours[best_idx]);
-        if (m.m00 <= 1e-6) {
-            return out;
-        }
-
-        out.valid = true;
-        out.u = static_cast<int>(m.m10 / m.m00);
-        out.v = static_cast<int>(m.m01 / m.m00);
-        out.area = best_area;
         return out;
     }
 
@@ -850,10 +991,112 @@ private:
         return true;
     }
 
-    geometry_msgs::Point applyEmaSmoothing(int block_id, const geometry_msgs::Point& current) {
+    std::vector<int> rankCandidateIndices(int block_id,
+                                          const DetectionResult& det,
+                                          const ros::Time& stamp) const {
+        std::vector<int> indices(det.centroids.size());
+        for (size_t i = 0; i < indices.size(); ++i) {
+            indices[i] = static_cast<int>(i);
+        }
+
+        auto centroid_it = last_image_centroids_.find(block_id);
+        auto time_it = last_image_centroid_times_.find(block_id);
+        if (centroid_it == last_image_centroids_.end() || time_it == last_image_centroid_times_.end()) {
+            return indices;
+        }
+
+        if (image_track_timeout_sec_ <= 0.0 || (stamp - time_it->second).toSec() > image_track_timeout_sec_) {
+            return indices;
+        }
+
+        const cv::Point2f previous = centroid_it->second;
+        bool have_nearby_candidate = false;
+        for (const int idx : indices) {
+            const double dx = static_cast<double>(det.centroids[static_cast<size_t>(idx)].x) - previous.x;
+            const double dy = static_cast<double>(det.centroids[static_cast<size_t>(idx)].y) - previous.y;
+            const double dist = std::sqrt(dx * dx + dy * dy);
+            if (dist <= max_candidate_jump_px_) {
+                have_nearby_candidate = true;
+                break;
+            }
+        }
+
+        if (!have_nearby_candidate) {
+            return indices;
+        }
+
+        std::stable_sort(indices.begin(), indices.end(),
+                         [&](int a, int b) {
+                             const cv::Point& pa = det.centroids[static_cast<size_t>(a)];
+                             const cv::Point& pb = det.centroids[static_cast<size_t>(b)];
+                             const double dxa = static_cast<double>(pa.x) - previous.x;
+                             const double dya = static_cast<double>(pa.y) - previous.y;
+                             const double dxb = static_cast<double>(pb.x) - previous.x;
+                             const double dyb = static_cast<double>(pb.y) - previous.y;
+                             const double dist_a = std::sqrt(dxa * dxa + dya * dya);
+                             const double dist_b = std::sqrt(dxb * dxb + dyb * dyb);
+                             const bool near_a = dist_a <= max_candidate_jump_px_;
+                             const bool near_b = dist_b <= max_candidate_jump_px_;
+                             if (near_a != near_b) {
+                                 return near_a;
+                             }
+                             if (std::fabs(dist_a - dist_b) > 1e-6) {
+                                 return dist_a < dist_b;
+                             }
+                             return det.areas[static_cast<size_t>(a)] > det.areas[static_cast<size_t>(b)];
+                         });
+        return indices;
+    }
+
+    void rememberImageCentroid(int block_id, const cv::Point& centroid, const ros::Time& stamp) {
+        last_image_centroids_[block_id] = centroid;
+        last_image_centroid_times_[block_id] = stamp;
+    }
+
+    void pruneTrackingState(const ros::Time& now) {
+        if (image_track_timeout_sec_ > 0.0) {
+            for (auto it = last_image_centroid_times_.begin(); it != last_image_centroid_times_.end();) {
+                if ((now - it->second).toSec() > image_track_timeout_sec_) {
+                    last_image_centroids_.erase(it->first);
+                    it = last_image_centroid_times_.erase(it);
+                } else {
+                    ++it;
+                }
+            }
+        }
+
+        if (position_reset_timeout_sec_ > 0.0) {
+            for (auto it = filtered_position_times_.begin(); it != filtered_position_times_.end();) {
+                if ((now - it->second).toSec() > position_reset_timeout_sec_) {
+                    filtered_positions_.erase(it->first);
+                    it = filtered_position_times_.erase(it);
+                } else {
+                    ++it;
+                }
+            }
+        }
+    }
+
+    geometry_msgs::Point applyEmaSmoothing(int block_id,
+                                           const geometry_msgs::Point& current,
+                                           const ros::Time& stamp) {
         auto it = filtered_positions_.find(block_id);
-        if (it == filtered_positions_.end()) {
+        auto time_it = filtered_position_times_.find(block_id);
+        if (it == filtered_positions_.end() || time_it == filtered_position_times_.end()) {
             filtered_positions_[block_id] = current;
+            filtered_position_times_[block_id] = stamp;
+            return current;
+        }
+
+        const double age_sec = (stamp - time_it->second).toSec();
+        const double dx = current.x - it->second.x;
+        const double dy = current.y - it->second.y;
+        const double dz = current.z - it->second.z;
+        const double jump_m = std::sqrt(dx * dx + dy * dy + dz * dz);
+        if ((position_reset_timeout_sec_ > 0.0 && age_sec > position_reset_timeout_sec_) ||
+            (max_position_jump_m_ > 0.0 && jump_m > max_position_jump_m_)) {
+            filtered_positions_[block_id] = current;
+            filtered_position_times_[block_id] = stamp;
             return current;
         }
 
@@ -861,6 +1104,7 @@ private:
         prev.x = smoothing_alpha_ * current.x + (1.0 - smoothing_alpha_) * prev.x;
         prev.y = smoothing_alpha_ * current.y + (1.0 - smoothing_alpha_) * prev.y;
         prev.z = smoothing_alpha_ * current.z + (1.0 - smoothing_alpha_) * prev.z;
+        filtered_position_times_[block_id] = stamp;
         return prev;
     }
 
@@ -974,6 +1218,7 @@ private:
     double workspace_min_z_ = -10.0;
     double workspace_max_z_ = 10.0;
 
+    int blur_kernel_size_ = 3;
     double min_block_area_;
     double max_block_area_;
     int mask_open_iterations_;
@@ -991,6 +1236,7 @@ private:
 
     bool enable_player_detection_;
     double max_select_distance_m_;
+    double max_select_distance_px_fallback_;
     double selection_cooldown_sec_;
     double selection_hold_sec_;
     double min_hand_area_;
@@ -1004,6 +1250,10 @@ private:
     int stable_candidate_id_ = -1;
     ros::Time stable_candidate_since_;
     bool selection_armed_ = true;
+    double image_track_timeout_sec_ = 0.5;
+    double max_candidate_jump_px_ = 120.0;
+    double position_reset_timeout_sec_ = 0.5;
+    double max_position_jump_m_ = 0.10;
 
     std::vector<ColorConfig> color_configs_;
     std::vector<HsvRange> skin_ranges_;
@@ -1018,6 +1268,9 @@ private:
     bool has_camera_model_;
 
     std::map<int, geometry_msgs::Point> filtered_positions_;
+    std::map<int, ros::Time> filtered_position_times_;
+    std::map<int, cv::Point2f> last_image_centroids_;
+    std::map<int, ros::Time> last_image_centroid_times_;
 
     tf2_ros::Buffer tf_buffer_;
     tf2_ros::TransformListener tf_listener_;

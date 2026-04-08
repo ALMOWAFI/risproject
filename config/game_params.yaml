@@ -50,6 +50,11 @@ vision_node:
   workspace_min_z: -10.0
   workspace_max_z: 10.0
   
+  # Pre-processing: Gaussian blur before BGR->HSV conversion.
+  # Reduces pixel-level camera noise that causes hue jitter at block edges.
+  # Must be odd. Set to 0 or 1 to disable.
+  blur_kernel_size: 3
+
   # Contour filtering and mask cleanup
   min_block_area: 500       # pixels
   max_block_area: 60000     # pixels
@@ -70,6 +75,7 @@ vision_node:
   # Player selection (real hand detection)
   enable_player_detection: true
   max_select_distance_m: 0.12   # hand within this distance of block (meters)
+  max_select_distance_px_fallback: 90  # fallback image-space gate if hand depth/TF is unavailable
   selection_cooldown_sec: 1.0   # min time between selections
   selection_hold_sec: 3.0       # hand must stay on same block this long before selection
   min_hand_area: 500            # min skin blob area (pixels)
@@ -78,6 +84,10 @@ vision_node:
   exclude_skin_from_block_masks: true
   skin_mask_open_iterations: 1
   skin_mask_close_iterations: 1
+  image_track_timeout_sec: 0.5
+  max_candidate_jump_px: 120
+  position_reset_timeout_sec: 0.5
+  max_position_jump_m: 0.10
   skin_hsv_ranges:
     - [0, 15, 40, 255, 40, 255]
     - [165, 180, 40, 255, 40, 255]
@@ -85,14 +95,14 @@ vision_node:
   # HSV ranges format: [hmin, hmax, smin, smax, vmin, vmax]
   hsv_ranges:
     red:
-      - [0, 15, 60, 255, 30, 255]
-      - [165, 180, 60, 255, 30, 255]
+      - [0, 15, 90, 255, 50, 255]       # S_min raised 60->90 to reject low-sat table surfaces
+      - [165, 180, 90, 255, 50, 255]    # same for upper red wrap-around
     green:
       - [40, 85, 70, 255, 50, 255]
     blue:
       - [95, 135, 70, 255, 50, 255]
     yellow:
-      - [20, 35, 100, 255, 80, 255]
+      - [18, 40, 100, 255, 80, 255]     # H widened 20-35 -> 18-40 for lighting robustness
     
 motion_node:
   # Robot parameters
