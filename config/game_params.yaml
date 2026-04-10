@@ -65,7 +65,7 @@ vision_node:
   depth_window_radius: 2    # median window radius in pixels
   min_depth_m: 0.10
   max_depth_m: 2.50
-  max_depth_age_sec: 1.0    # max age difference RGB-depth
+  max_depth_age_sec: 0.5    # max age for preferred sync; falls back to newest frame if exceeded
 
   # Output behavior
   marker_size_m: 0.05

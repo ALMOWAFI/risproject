@@ -919,26 +919,45 @@ private:
 
         double best_delta = std::numeric_limits<double>::infinity();
         const DepthFrame* best_frame = nullptr;
+        const DepthFrame* newest_frame = nullptr;
+        double newest_time = -1.0;
+
         for (const DepthFrame& frame : depth_buffer_) {
             const ros::Time ds = frame.stamp.isZero() ? ros::Time::now() : frame.stamp;
             const double delta = std::fabs((color_stamp - ds).toSec());
-            if (delta > max_depth_age_sec_) {
-                continue;
-            }
             if (delta < best_delta) {
                 best_delta = delta;
                 best_frame = &frame;
             }
+            // Track newest frame as fallback.
+            const double t = ds.toSec();
+            if (t > newest_time) {
+                newest_time = t;
+                newest_frame = &frame;
+            }
         }
 
-        if (best_frame == nullptr) {
+        // Use best match if within tolerance; otherwise fall back to the newest
+        // depth frame so the pipeline keeps running despite timestamp drift.
+        const DepthFrame* chosen = nullptr;
+        if (best_delta <= max_depth_age_sec_) {
+            chosen = best_frame;
+        } else {
+            ROS_WARN_THROTTLE(2.0,
+                              "Depth/RGB timestamp drift: best delta=%.3fs (max=%.3fs). "
+                              "Using newest depth frame as fallback.",
+                              best_delta, max_depth_age_sec_);
+            chosen = newest_frame;
+        }
+
+        if (chosen == nullptr) {
             has_depth_ = false;
             return false;
         }
 
-        latest_depth_ = best_frame->image;
-        latest_depth_encoding_ = best_frame->encoding;
-        latest_depth_stamp_ = best_frame->stamp;
+        latest_depth_ = chosen->image;
+        latest_depth_encoding_ = chosen->encoding;
+        latest_depth_stamp_ = chosen->stamp;
         has_depth_ = true;
         return true;
     }
