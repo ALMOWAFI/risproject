@@ -402,18 +402,44 @@ private:
             return;
         }
 
-        if (!selectClosestDepthFrame(color_msg->header.stamp)) {
-            ROS_WARN_THROTTLE(2.0,
-                              "No depth frame close enough to RGB frame (max_depth_age_sec=%.3f)",
-                              max_depth_age_sec_);
-            return;
-        }
-
+        // Decode color image early so we can publish debug images even on depth-sync failure.
         cv_bridge::CvImageConstPtr cv_ptr;
         try {
             cv_ptr = cv_bridge::toCvShare(color_msg, sensor_msgs::image_encodings::BGR8);
         } catch (const cv_bridge::Exception& e) {
             ROS_WARN_THROTTLE(2.0, "Color cv_bridge error: %s", e.what());
+            return;
+        }
+
+        if (!selectClosestDepthFrame(color_msg->header.stamp)) {
+            // Log the best available delta so the user can tune max_depth_age_sec or
+            // diagnose timestamp mismatches between the depth and RGB streams.
+            double best_delta = std::numeric_limits<double>::infinity();
+            for (const DepthFrame& f : depth_buffer_) {
+                const double d = std::fabs((color_msg->header.stamp - f.stamp).toSec());
+                if (d < best_delta) best_delta = d;
+            }
+            if (depth_buffer_.empty()) {
+                ROS_WARN_THROTTLE(2.0, "No depth frame received yet — check that '%s' is publishing",
+                                  depth_topic_.c_str());
+            } else {
+                ROS_WARN_THROTTLE(2.0,
+                                  "Depth/RGB sync failed: best delta=%.3fs > max_depth_age_sec=%.3f. "
+                                  "Increase max_depth_age_sec or check camera timestamp alignment.",
+                                  best_delta, max_depth_age_sec_);
+            }
+
+            // Still publish a debug overlay so rqt_image_view shows what the camera sees.
+            if (enable_debug_images_ && debug_overlay_pub_.getNumSubscribers() > 0) {
+                cv::Mat overlay = cv_ptr->image.clone();
+                cv::putText(overlay, "NO DEPTH SYNC", cv::Point(10, 30),
+                            cv::FONT_HERSHEY_SIMPLEX, 1.0, cv::Scalar(0, 0, 255), 2, cv::LINE_AA);
+                cv_bridge::CvImage out;
+                out.header = color_msg->header;
+                out.encoding = sensor_msgs::image_encodings::BGR8;
+                out.image = overlay;
+                debug_overlay_pub_.publish(out.toImageMsg());
+            }
             return;
         }
 
