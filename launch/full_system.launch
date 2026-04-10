@@ -5,6 +5,16 @@
     <arg name="use_real_robot" default="false"/>
     <arg name="enable_debug_images" default="true"/>
     
+    <!-- RealSense camera with aligned depth enabled -->
+    <arg name="start_camera" default="true"/>
+    <include if="$(arg start_camera)" file="$(find realsense2_camera)/launch/rs_camera.launch">
+        <arg name="camera"        value="realsense"/>
+        <arg name="align_depth"   value="true"/>
+        <arg name="enable_sync"   value="true"/>
+        <arg name="enable_color"  value="true"/>
+        <arg name="enable_depth"  value="true"/>
+    </include>
+
     <!-- Game parameters -->
     <rosparam file="$(find memory_game)/config/game_params.yaml" command="load"/>
     
