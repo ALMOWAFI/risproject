@@ -397,17 +397,27 @@ private:
     }
 
     void colorCallback(const sensor_msgs::ImageConstPtr& color_msg) {
-        if (!has_camera_model_) {
-            ROS_WARN_THROTTLE(2.0, "Waiting for camera_info before processing RGB frames");
-            return;
-        }
-
-        // Decode color image early so we can publish debug images even on depth-sync failure.
+        // Decode first so we can always publish a debug image regardless of what fails below.
         cv_bridge::CvImageConstPtr cv_ptr;
         try {
             cv_ptr = cv_bridge::toCvShare(color_msg, sensor_msgs::image_encodings::BGR8);
         } catch (const cv_bridge::Exception& e) {
             ROS_WARN_THROTTLE(2.0, "Color cv_bridge error: %s", e.what());
+            return;
+        }
+
+        if (!has_camera_model_) {
+            ROS_WARN_THROTTLE(2.0, "Waiting for camera_info (%s)", camera_info_topic_.c_str());
+            if (enable_debug_images_ && debug_overlay_pub_.getNumSubscribers() > 0) {
+                cv::Mat overlay = cv_ptr->image.clone();
+                cv::putText(overlay, "NO CAMERA INFO", cv::Point(10, 30),
+                            cv::FONT_HERSHEY_SIMPLEX, 1.0, cv::Scalar(0, 165, 255), 2, cv::LINE_AA);
+                cv_bridge::CvImage out;
+                out.header = color_msg->header;
+                out.encoding = sensor_msgs::image_encodings::BGR8;
+                out.image = overlay;
+                debug_overlay_pub_.publish(out.toImageMsg());
+            }
             return;
         }
 
