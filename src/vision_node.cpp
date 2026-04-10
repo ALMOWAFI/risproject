@@ -411,12 +411,17 @@ private:
             return;
         }
 
-        if (!selectClosestDepthFrame(color_msg->header.stamp)) {
+        // Normalise zero stamps to wall-clock now so depth sync math doesn't blow up.
+        const ros::Time color_stamp =
+            color_msg->header.stamp.isZero() ? ros::Time::now() : color_msg->header.stamp;
+
+        if (!selectClosestDepthFrame(color_stamp)) {
             // Log the best available delta so the user can tune max_depth_age_sec or
             // diagnose timestamp mismatches between the depth and RGB streams.
             double best_delta = std::numeric_limits<double>::infinity();
             for (const DepthFrame& f : depth_buffer_) {
-                const double d = std::fabs((color_msg->header.stamp - f.stamp).toSec());
+                const ros::Time ds = f.stamp.isZero() ? ros::Time::now() : f.stamp;
+                const double d = std::fabs((color_stamp - ds).toSec());
                 if (d < best_delta) best_delta = d;
             }
             if (depth_buffer_.empty()) {
@@ -460,7 +465,7 @@ private:
         blocks.reserve(color_configs_.size());
         frame_blocks.reserve(color_configs_.size());
 
-        const ros::Time frame_stamp = color_msg->header.stamp.isZero() ? ros::Time::now() : color_msg->header.stamp;
+        const ros::Time frame_stamp = color_stamp;
         pruneTrackingState(frame_stamp);
 
         const bool publish_debug_images =
@@ -915,7 +920,8 @@ private:
         double best_delta = std::numeric_limits<double>::infinity();
         const DepthFrame* best_frame = nullptr;
         for (const DepthFrame& frame : depth_buffer_) {
-            const double delta = std::fabs((color_stamp - frame.stamp).toSec());
+            const ros::Time ds = frame.stamp.isZero() ? ros::Time::now() : frame.stamp;
+            const double delta = std::fabs((color_stamp - ds).toSec());
             if (delta > max_depth_age_sec_) {
                 continue;
             }
