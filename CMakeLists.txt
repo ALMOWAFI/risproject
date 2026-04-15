@@ -65,6 +65,14 @@ add_executable(vision_node src/vision_node.cpp)
 target_link_libraries(vision_node ${catkin_LIBRARIES} ${OpenCV_LIBRARIES})
 add_dependencies(vision_node ${${PROJECT_NAME}_EXPORTED_TARGETS} ${catkin_EXPORTED_TARGETS})
 
+add_executable(vision_node_no_player_selection try_clean/vision_node_no_player_selection.cpp)
+target_link_libraries(vision_node_no_player_selection ${catkin_LIBRARIES} ${OpenCV_LIBRARIES})
+add_dependencies(vision_node_no_player_selection ${${PROJECT_NAME}_EXPORTED_TARGETS} ${catkin_EXPORTED_TARGETS})
+
+add_executable(vision_node_simple_selection try_clean/vision_node_simple_selection.cpp)
+target_link_libraries(vision_node_simple_selection ${catkin_LIBRARIES})
+add_dependencies(vision_node_simple_selection ${${PROJECT_NAME}_EXPORTED_TARGETS} ${catkin_EXPORTED_TARGETS})
+
 add_executable(game_node src/game_node.cpp)
 target_link_libraries(game_node ${catkin_LIBRARIES})
 add_dependencies(game_node ${${PROJECT_NAME}_EXPORTED_TARGETS} ${catkin_EXPORTED_TARGETS})
@@ -98,7 +106,7 @@ endif()
 #############
 
 ## Mark executables and/or libraries for installation
-install(TARGETS vision_node game_node motion_node motion_hw_node
+install(TARGETS vision_node vision_node_no_player_selection vision_node_simple_selection game_node motion_node motion_hw_node
   ARCHIVE DESTINATION ${CATKIN_PACKAGE_LIB_DESTINATION}
   LIBRARY DESTINATION ${CATKIN_PACKAGE_LIB_DESTINATION}
   RUNTIME DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
@@ -123,6 +131,12 @@ install(DIRECTORY config/
 )
 
 install(PROGRAMS scripts/test_player_selection.py
+  DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
+)
+
+install(PROGRAMS
+  try_clean/player_selection.py
+  try_clean/vision_node_full_python.py
   DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
 )
 
