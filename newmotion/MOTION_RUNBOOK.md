@@ -1,69 +1,78 @@
-# Motion Runbook (Lab Day)
+# Motion Runbook — memory_game robot pointer
 
-Goal: figure out what motion interface the lab Panda stack exposes, then connect our `/target_block` stream to it.
+## Overview
 
-## 1) Start Lab Bringup
+The robot points to blocks on the table using a physical pointer (pen, pencil, rod, etc.)
+mounted as the end-effector. For each block in the sequence:
 
-This depends on your lab. Typical:
-- Panda bringup (driver + controllers)
-- Camera bringup
+1. The arm moves (joint-space) to a **hover pose** directly above the block.
+2. The arm executes a **Cartesian dip**: hover → touch-point → hover.
+3. The arm moves (joint-space) to the **hover pose of the next block** — it does NOT
+   return to a home pose between blocks.
+4. After the last block, the arm optionally returns home (`~return_home true`).
 
-## 2) Probe What Exists
+Inputs and outputs of the motion node are unchanged:
 
-From any terminal with ROS sourced:
+| Direction | Topic            | Type                     |
+|-----------|------------------|--------------------------|
+| In        | `/target_block`  | `memory_game/Block`      |
+| Out       | `/motion_status` | `std_msgs/String`        |
 
-```bash
-bash newmotion/probe_motion_interface.sh
-```
+---
 
-You are looking for a topic that:
-- has `Subscribers: ...` not empty
-- and is a motion command interface
+## Status messages published on `/motion_status`
 
-Common possibilities:
-- Pose setpoint topic: `Type: geometry_msgs/PoseStamped` (best case)
-- Trajectory interface: `Type: trajectory_msgs/JointTrajectory` or an action like `FollowJointTrajectory`
-- MoveIt: node `/move_group` exists
+| Message                  | Meaning                                              |
+|--------------------------|------------------------------------------------------|
+| `INIT`                   | Node starting up, MoveIt interface not ready yet     |
+| `IDLE`                   | All queued blocks processed, robot stopped           |
+| `MOVING_TO_TARGET:<id>`  | Joint-space move to hover pose above block `<id>`    |
+| `POINTING:<id>`          | Cartesian dip in progress for block `<id>`           |
+| `AT_TARGET:<id>`         | Dip complete, pointer touched block `<id>`           |
+| `RETURNING_HOME`         | Final return-home move after last block              |
 
-## 3) If You Have A `PoseStamped` Command Topic
+---
 
-This is the fastest integration.
+## Which node to run
 
-1. Run our nodes as usual:
+### Primary: `motion_moveit_node` (MoveIt, simulation + hardware)
 
-```bash
-rosrun memory_game vision_node
-rosrun memory_game game_node _require_detected_blocks:=true
-```
-
-2. Publish the target block pose to the controller topic.
-
-You can do this with a dedicated node (preferred) or manually to test.
-
-Manual test (replace `CMD_TOPIC`):
+Requires `/move_group` to be running.
 
 ```bash
-rostopic pub -1 CMD_TOPIC geometry_msgs/PoseStamped \
-'{header:{frame_id:"panda_link0"}, pose:{position:{x:0.4,y:0.0,z:0.4}, orientation:{w:1.0}}}'
+rosrun memory_game motion_moveit_node
+# or via launch file:
+roslaunch memory_game motion_moveit.launch
 ```
 
-If the robot moves, you have the right interface.
+### Fallback: `motion_hw_node` (open-loop PoseStamped, hardware only)
 
-## 4) If You Only Have Trajectory/MoveIt
-
-Then motion must be implemented as:
-- a trajectory action client (FollowJointTrajectory), or
-- a MoveIt client (plan + execute)
-
-That is more code, but still doable once you know which interface exists.
-
-## 5) Minimum Sanity Checks
+Use only when MoveIt is unavailable. Does not perform Cartesian dips — publishes
+a single PoseStamped per block and uses fixed timers.
 
 ```bash
-rostopic echo -n1 /detected_blocks
-rostopic echo -n1 /target_block
-rostopic echo /motion_status
+rosrun memory_game motion_hw_node
 ```
 
-If `/target_block.position` is nonsense, game started before blocks were cached (enable `_require_detected_blocks:=true`).
+---
 
+## Key parameters — `motion_moveit_node`
+
+All parameters are on the private namespace (`~`).
+
+| Parameter                   | Default         | Description |
+|-----------------------------|-----------------|-------------|
+| `planning_group`            | `panda_arm`     | MoveIt planning group |
+| `pose_frame`                | `panda_link0`   | Reference frame for all target poses |
+| `planning_time`             | `5.0`           | Max seconds MoveIt may spend planning |
+| `max_velocity_scaling`      | `0.10`          | Velocity limit (0–1); keep low during demos |
+| `max_acceleration_scaling`  | `0.10`          | Acceleration limit (0–1) |
+| `travel_z`                  | `0.35`          | Minimum absolute Z for hover poses (safety floor) |
+| `tool_offset_z`             | `0.05`          | Z offset above `block.position.z` for the touch-point |
+| `approach_margin`           | `0.10`          | Additional clearance above the block for hover poses |
+| `cartesian_eef_step`        | `0.01`          | Max Cartesian step size (m) during dip |
+| `cartesian_fraction_min`    | `0.90`          | Minimum fraction of path that must be planned; below this the dip is aborted |
+| `return_home`               | `true`          | Return to home joints after the final block |
+| `use_current_state_as_home` | `true`          | Capture current joint state at startup as the home target |
+
+### Hover Z calculation
