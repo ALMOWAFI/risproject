@@ -11,7 +11,7 @@
     <header class="hero">
       <div>
         <p class="eyebrow">Robot Memory Game</p>
-        <h1>Control Deck TEST</h1>
+        <h1>Control Deck</h1>
         <p class="hero-copy">
           Thin operator interface for reading the game, motion, and perception state
           from one place without moving game logic into the UI.
@@ -27,13 +27,14 @@
     <main class="dashboard-grid">
       <section class="panel panel-primary controls-panel">
         <div class="panel-head">
-        <p class="panel-kicker">Session</p>
-        <h2>Operator Controls</h2>
-    </div>
+          <p class="panel-kicker">Session</p>
+          <h2>Operator Controls</h2>
+        </div>
 
-<p style="color: red; font-size: 16px;">
-  Use these controls to start or stop the current game session.
-</p>
+        <p class="panel-help">
+          Use these controls to manage the game session. Start initializes the system,
+          while End Game stops all active components. Next Round will be used for future round control.
+        </p>
 
         <div class="button-stack">
           <button id="start-btn" class="action-button action-start">Start</button>
@@ -43,10 +44,10 @@
 
         <div class="preview-message" id="preview-message">
           <p class="panel-help">
-  Start initializes and launches the game session, including vision, game logic,
-  and motion components (when available). End Game safely stops all running processes.
-  Next Round is reserved for future round control and is not yet connected to backend logic.
-</p>
+            Start initializes and launches the game session, including vision, game logic,
+            and motion components (when available). End Game safely stops all running processes.
+            Next Round is reserved for future round control and is not yet connected to backend logic.
+          </p>
         </div>
 
         <div class="session-strip">
@@ -63,11 +64,11 @@
         <div class="detail-card detail-card-wide process-card">
           <span class="detail-label">Managed Processes</span>
           <p class="panel-help">
-  This section displays the ROS nodes currently managed by the web interface.
-  Typical processes include the vision node (camera and detection),
-  game node (game logic and scoring), and motion node (robot control).
-  Their runtime status will appear here when a session is active.
-</p>
+            This section displays the ROS nodes currently managed by the web interface.
+            Typical processes include the vision node (camera and detection),
+            game node (game logic and scoring), and motion node (robot control).
+            Their runtime status will appear here when a session is active.
+          </p>
           <ul class="block-list" id="process-list">
             <li>No process state yet.</li>
           </ul>
@@ -79,9 +80,9 @@
           <p class="panel-kicker">Live Readout</p>
           <h2>Score and State</h2>
           <p class="panel-help">
-  This panel summarizes the current game session, including score, visible blocks,
-  the active game state, and the latest motion feedback from the robot side.
-</p>
+            This panel summarizes the current game session, including score, visible blocks,
+            the active game state, and the latest motion feedback from the robot side.
+          </p>
         </div>
 
         <div class="score-cluster">
@@ -110,6 +111,10 @@
         <div class="panel-head">
           <p class="panel-kicker">Live Topics</p>
           <h2>Perception and Input</h2>
+          <p class="panel-help">
+            This section shows live perception-related information, including the latest
+            player selection and the blocks currently detected by the system.
+          </p>
         </div>
 
         <div class="detail-stack">
@@ -130,6 +135,9 @@
         <div class="panel-head">
           <p class="panel-kicker">Operator Feed</p>
           <h2>Bridge Log</h2>
+          <p class="panel-help">
+            This log records bridge activity, connection issues, and session-related status messages.
+          </p>
         </div>
 
         <ol class="log-list" id="log-list">
