@@ -103,6 +103,15 @@ vision_node:
       - [95, 135, 70, 255, 50, 255]
     yellow:
       - [18, 40, 100, 255, 80, 255]     # H widened 20-35 -> 18-40 for lighting robustness
+
+player_selection:
+  target_frame: "panda_link0"
+  selection_type: "slot_disappeared"
+  max_slot_distance_m: 0.08
+  missing_hold_sec: 1.0
+  selection_cooldown_sec: 1.0
+  only_waiting_player: true
+  min_slots_to_initialize: 3
     
 motion_node:
   # Robot parameters

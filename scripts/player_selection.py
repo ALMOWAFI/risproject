@@ -17,7 +17,6 @@ class SlotState:
     x: float
     y: float
     z: float
-    last_seen: rospy.Time
     missing_since: Optional[rospy.Time] = None
     selected_latched: bool = False
 
@@ -29,12 +28,13 @@ class PlayerSelectionNode:
         self.max_slot_distance_m = float(rospy.get_param("~max_slot_distance_m", 0.08))
         self.missing_hold_sec = float(rospy.get_param("~missing_hold_sec", 1.0))
         self.selection_cooldown_sec = float(rospy.get_param("~selection_cooldown_sec", 1.0))
-        self.freeze_slots_on_first_frame = bool(rospy.get_param("~freeze_slots_on_first_frame", True))
         self.only_waiting_player = bool(rospy.get_param("~only_waiting_player", True))
+        self.min_slots_to_initialize = int(rospy.get_param("~min_slots_to_initialize", 3))
 
         self.current_game_state = "IDLE"
-        self.previous_game_state = "IDLE"
         self.last_selection_time = rospy.Time(0)
+        self.latest_observed: Dict[int, object] = {}
+        self.latest_observed_stamp = rospy.Time(0)
         self.slots_initialized = False
         self.slots: Dict[int, SlotState] = {}
 
@@ -45,31 +45,67 @@ class PlayerSelectionNode:
         rospy.loginfo("player_selection.py ready")
 
     def game_state_callback(self, msg: String) -> None:
-        self.previous_game_state = self.current_game_state
+        previous_state = self.current_game_state
         self.current_game_state = msg.data
-        if self.current_game_state == "WAITING_PLAYER" and self.previous_game_state != "WAITING_PLAYER":
-            self.slots_initialized = False
-            self.slots.clear()
+        if self.current_game_state == "WAITING_PLAYER" and previous_state != "WAITING_PLAYER":
+            self.start_new_round()
 
     def blocks_callback(self, msg: BlockArray) -> None:
-        now = msg.header.stamp if msg.header.stamp != rospy.Time() else rospy.Time.now()
-        if self.only_waiting_player and self.current_game_state != "WAITING_PLAYER":
-            self.reset_missing_state(now)
-            return
+        stamp = msg.header.stamp if msg.header.stamp != rospy.Time() else rospy.Time.now()
+        observed = {block.id: block for block in msg.blocks}
+        self.latest_observed = observed
+        self.latest_observed_stamp = stamp
 
-        observed = {}
-        for block in msg.blocks:
-            observed[block.id] = block
+        if self.only_waiting_player and self.current_game_state != "WAITING_PLAYER":
+            return
 
         if not self.slots_initialized:
-            self.initialize_slots(observed, now)
+            self.try_initialize_slots(stamp)
             return
 
-        for block_id, slot in self.slots.items():
-            current = observed.get(block_id)
+        self.evaluate_slots(observed, stamp)
+
+    def start_new_round(self) -> None:
+        self.slots.clear()
+        self.slots_initialized = False
+        self.last_selection_time = rospy.Time(0)
+        if self.latest_observed:
+            latest_stamp = (
+                self.latest_observed_stamp
+                if self.latest_observed_stamp != rospy.Time()
+                else rospy.Time.now()
+            )
+            self.try_initialize_slots(latest_stamp)
+
+    def try_initialize_slots(self, stamp: rospy.Time) -> None:
+        if len(self.latest_observed) < self.min_slots_to_initialize:
+            rospy.logwarn_throttle(
+                2.0,
+                "player_selection.py waiting for enough slots to initialize (%d/%d)",
+                len(self.latest_observed),
+                self.min_slots_to_initialize,
+            )
+            return
+
+        self.slots.clear()
+        for block_id, block in self.latest_observed.items():
+            self.slots[block_id] = SlotState(
+                block_id=block_id,
+                color=block.color,
+                x=block.position.x,
+                y=block.position.y,
+                z=block.position.z,
+            )
+
+        self.slots_initialized = True
+        rospy.loginfo("player_selection.py initialized %d slots for WAITING_PLAYER", len(self.slots))
+
+    def evaluate_slots(self, observed: Dict[int, object], stamp: rospy.Time) -> None:
+        for slot in self.slots.values():
+            current = observed.get(slot.block_id)
             slot_occupied = current is not None and self.matches_slot(slot, current)
+
             if slot_occupied:
-                slot.last_seen = now
                 slot.missing_since = None
                 slot.selected_latched = False
                 continue
@@ -78,33 +114,14 @@ class PlayerSelectionNode:
                 continue
 
             if slot.missing_since is None:
-                slot.missing_since = now
+                slot.missing_since = stamp
                 continue
 
-            held_missing = (now - slot.missing_since).to_sec()
-            cooled_down = (now - self.last_selection_time).to_sec() >= self.selection_cooldown_sec
+            held_missing = (stamp - slot.missing_since).to_sec()
+            cooled_down = (stamp - self.last_selection_time).to_sec() >= self.selection_cooldown_sec
             if held_missing >= self.missing_hold_sec and cooled_down:
-                self.publish_selection(slot, now)
+                self.publish_selection(slot, stamp)
                 slot.selected_latched = True
-
-    def initialize_slots(self, observed: Dict[int, object], now: rospy.Time) -> None:
-        self.slots.clear()
-        for block_id, block in observed.items():
-            self.slots[block_id] = SlotState(
-                block_id=block_id,
-                color=block.color,
-                x=block.position.x,
-                y=block.position.y,
-                z=block.position.z,
-                last_seen=now,
-            )
-        self.slots_initialized = bool(self.slots) and self.freeze_slots_on_first_frame
-
-    def reset_missing_state(self, now: rospy.Time) -> None:
-        for slot in self.slots.values():
-            slot.missing_since = None
-            slot.last_seen = now
-            slot.selected_latched = False
 
     def matches_slot(self, slot: SlotState, block: object) -> bool:
         dx = slot.x - block.position.x
@@ -123,7 +140,11 @@ class PlayerSelectionNode:
         msg.confidence = 1.0
         self.selection_pub.publish(msg)
         self.last_selection_time = stamp
-        rospy.loginfo("Slot disappearance selection: block %d (%s)", slot.block_id, slot.color)
+        rospy.loginfo(
+            "player_selection.py selected block %d (%s) by slot disappearance",
+            slot.block_id,
+            slot.color,
+        )
 
 
 def main() -> None:
