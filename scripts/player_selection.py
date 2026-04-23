@@ -28,7 +28,8 @@ class PlayerSelectionNode:
         self.max_slot_distance_m = float(rospy.get_param("~max_slot_distance_m", 0.08))
         self.missing_hold_sec = float(rospy.get_param("~missing_hold_sec", 1.0))
         self.selection_cooldown_sec = float(rospy.get_param("~selection_cooldown_sec", 1.0))
-        self.only_waiting_player = bool(rospy.get_param("~only_waiting_player", True))
+        # Default to active mode so the node can be tested without the full game stack.
+        self.only_waiting_player = bool(rospy.get_param("~only_waiting_player", False))
         self.min_slots_to_initialize = int(rospy.get_param("~min_slots_to_initialize", 3))
 
         self.current_game_state = "IDLE"
@@ -57,6 +58,11 @@ class PlayerSelectionNode:
         self.latest_observed_stamp = stamp
 
         if self.only_waiting_player and self.current_game_state != "WAITING_PLAYER":
+            rospy.logwarn_throttle(
+                2.0,
+                "player_selection.py idle: waiting for WAITING_PLAYER (current=%s)",
+                self.current_game_state,
+            )
             return
 
         if not self.slots_initialized:

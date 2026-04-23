@@ -110,7 +110,7 @@ player_selection:
   max_slot_distance_m: 0.08
   missing_hold_sec: 1.0
   selection_cooldown_sec: 1.0
-  only_waiting_player: true
+  only_waiting_player: false
   min_slots_to_initialize: 3
     
 motion_node:
