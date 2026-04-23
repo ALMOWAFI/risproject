@@ -130,13 +130,10 @@ install(DIRECTORY config/
   PATTERN ".svn" EXCLUDE
 )
 
-install(PROGRAMS scripts/test_player_selection.py
-  DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
-)
-
-install(PROGRAMS
-  try_clean/player_selection.py
-  try_clean/vision_node_full_python.py
+catkin_install_python(PROGRAMS
+  scripts/test_player_selection.py
+  scripts/player_selection.py
+  scripts/vision_node_full_python.py
   DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
 )
 
