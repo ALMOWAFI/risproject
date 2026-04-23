@@ -19,6 +19,7 @@ class SlotState:
     z: float
     last_seen: rospy.Time
     missing_since: Optional[rospy.Time] = None
+    selected_latched: bool = False
 
 
 class PlayerSelectionNode:
@@ -32,6 +33,7 @@ class PlayerSelectionNode:
         self.only_waiting_player = bool(rospy.get_param("~only_waiting_player", True))
 
         self.current_game_state = "IDLE"
+        self.previous_game_state = "IDLE"
         self.last_selection_time = rospy.Time(0)
         self.slots_initialized = False
         self.slots: Dict[int, SlotState] = {}
@@ -43,7 +45,11 @@ class PlayerSelectionNode:
         rospy.loginfo("player_selection.py ready")
 
     def game_state_callback(self, msg: String) -> None:
+        self.previous_game_state = self.current_game_state
         self.current_game_state = msg.data
+        if self.current_game_state == "WAITING_PLAYER" and self.previous_game_state != "WAITING_PLAYER":
+            self.slots_initialized = False
+            self.slots.clear()
 
     def blocks_callback(self, msg: BlockArray) -> None:
         now = msg.header.stamp if msg.header.stamp != rospy.Time() else rospy.Time.now()
@@ -61,23 +67,28 @@ class PlayerSelectionNode:
 
         for block_id, slot in self.slots.items():
             current = observed.get(block_id)
-            if current is None:
-                if slot.missing_since is None:
-                    slot.missing_since = now
-                    continue
-
-                held_missing = (now - slot.missing_since).to_sec()
-                cooled_down = (now - self.last_selection_time).to_sec() >= self.selection_cooldown_sec
-                if held_missing >= self.missing_hold_sec and cooled_down:
-                    self.publish_selection(slot, now)
-                    slot.missing_since = now
-                continue
-
-            if self.matches_slot(slot, current):
+            slot_occupied = current is not None and self.matches_slot(slot, current)
+            if slot_occupied:
                 slot.last_seen = now
                 slot.missing_since = None
+                slot.selected_latched = False
+                continue
+
+            if slot.selected_latched:
+                continue
+
+            if slot.missing_since is None:
+                slot.missing_since = now
+                continue
+
+            held_missing = (now - slot.missing_since).to_sec()
+            cooled_down = (now - self.last_selection_time).to_sec() >= self.selection_cooldown_sec
+            if held_missing >= self.missing_hold_sec and cooled_down:
+                self.publish_selection(slot, now)
+                slot.selected_latched = True
 
     def initialize_slots(self, observed: Dict[int, object], now: rospy.Time) -> None:
+        self.slots.clear()
         for block_id, block in observed.items():
             self.slots[block_id] = SlotState(
                 block_id=block_id,
@@ -93,6 +104,7 @@ class PlayerSelectionNode:
         for slot in self.slots.values():
             slot.missing_since = None
             slot.last_seen = now
+            slot.selected_latched = False
 
     def matches_slot(self, slot: SlotState, block: object) -> bool:
         dx = slot.x - block.position.x

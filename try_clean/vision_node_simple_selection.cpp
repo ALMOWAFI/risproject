@@ -14,6 +14,7 @@ struct SlotState {
     geometry_msgs::Point position;
     ros::Time last_seen;
     ros::Time missing_since;
+    bool selected_latched = false;
 };
 
 class SimpleSelectionNode {
@@ -72,24 +73,30 @@ private:
         for (auto& entry : slots_) {
             SlotState& slot = entry.second;
             auto observed_it = observed.find(slot.block_id);
-            if (observed_it == observed.end()) {
-                if (slot.missing_since.isZero()) {
-                    slot.missing_since = now;
-                    continue;
-                }
+            const bool slot_occupied =
+                observed_it != observed.end() && matchesSlot(slot, observed_it->second);
 
-                const double held_missing = (now - slot.missing_since).toSec();
-                const double cooldown = (now - last_selection_time_).toSec();
-                if (held_missing >= missing_hold_sec_ && cooldown >= selection_cooldown_sec_) {
-                    publishSelection(slot, now);
-                    slot.missing_since = now;
-                }
+            if (slot_occupied) {
+                slot.last_seen = now;
+                slot.missing_since = ros::Time(0);
+                slot.selected_latched = false;
                 continue;
             }
 
-            if (matchesSlot(slot, observed_it->second)) {
-                slot.last_seen = now;
-                slot.missing_since = ros::Time(0);
+            if (slot.selected_latched) {
+                continue;
+            }
+
+            if (slot.missing_since.isZero()) {
+                slot.missing_since = now;
+                continue;
+            }
+
+            const double held_missing = (now - slot.missing_since).toSec();
+            const double cooldown = (now - last_selection_time_).toSec();
+            if (held_missing >= missing_hold_sec_ && cooldown >= selection_cooldown_sec_) {
+                publishSelection(slot, now);
+                slot.selected_latched = true;
             }
         }
     }
@@ -118,6 +125,7 @@ private:
         for (auto& entry : slots_) {
             entry.second.last_seen = now;
             entry.second.missing_since = ros::Time(0);
+            entry.second.selected_latched = false;
         }
     }
 
