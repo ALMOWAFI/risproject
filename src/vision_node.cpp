@@ -5,7 +5,8 @@
  * This node detects colored blocks from RGB + depth streams and publishes:
  *   - /detected_blocks (memory_game/BlockArray)
  *   - /visualization_marker_array (visualization_msgs/MarkerArray)
- *   - /player_selection (memory_game/PlayerSelection) when hand is near a block
+ *   - debug image topics for mask/overlay inspection
+ * Player selection is handled separately by scripts/player_selection.py.
  *
  * Core pipeline:
  *   1) RGB BGR -> HSV conversion
@@ -32,7 +33,6 @@
 #include <image_transport/image_transport.h>
 #include <memory_game/Block.h>
 #include <memory_game/BlockArray.h>
-#include <memory_game/PlayerSelection.h>
 #include <opencv2/core.hpp>
 #include <opencv2/imgproc.hpp>
 #include <ros/ros.h>
@@ -70,18 +70,6 @@ struct DetectionResult {
     std::vector<double> areas;
 };
 
-struct FrameBlockDetection {
-    memory_game::Block block;
-    int u = 0;
-    int v = 0;
-};
-
-struct HandDetection {
-    cv::Point centroid;
-    geometry_msgs::Point base;
-    bool has_base = false;
-};
-
 std_msgs::ColorRGBA MakeColor(float r, float g, float b, float a = 1.0f) {
     std_msgs::ColorRGBA c;
     c.r = r;
@@ -112,17 +100,14 @@ public:
           tf_buffer_(),
           tf_listener_(tf_buffer_),
           has_depth_(false),
-          has_camera_model_(false),
-          last_selected_block_id_(-1) {
+          has_camera_model_(false) {
         loadParams();
 
         blocks_pub_ = nh_.advertise<memory_game::BlockArray>("/detected_blocks", 10);
         markers_pub_ = nh_.advertise<visualization_msgs::MarkerArray>(markers_topic_, 10);
-        selection_pub_ = nh_.advertise<memory_game::PlayerSelection>("/player_selection", 10);
 
         if (enable_debug_images_) {
             debug_mask_pub_ = it_.advertise("/vision/debug_mask", 1);
-            debug_hand_mask_pub_ = it_.advertise("/vision/debug_hand_mask", 1);
             debug_overlay_pub_ = it_.advertise("/vision/debug_overlay", 1);
         }
 
@@ -130,7 +115,7 @@ public:
         depth_sub_ = nh_.subscribe(depth_topic_, 10, &VisionNode::depthCallback, this);
         camera_info_sub_ = nh_.subscribe(camera_info_topic_, 5, &VisionNode::cameraInfoCallback, this);
 
-        ROS_INFO("vision_node ready");
+        ROS_INFO("vision_node ready (block detection only)");
         ROS_INFO("color_topic=%s", color_topic_.c_str());
         ROS_INFO("depth_topic=%s", depth_topic_.c_str());
         ROS_INFO("camera_info_topic=%s", camera_info_topic_.c_str());
@@ -146,22 +131,6 @@ private:
         pnh_.param("target_frame", target_frame_, std::string("panda_link0"));
         pnh_.param("markers_topic", markers_topic_, std::string("/vision/visualization_marker_array"));
         pnh_.param("disable_red", disable_red_, true);
-
-        // Optional ROI to ignore background (pixel coordinates in the color image).
-        pnh_.param("roi_enable", roi_enable_, false);
-        pnh_.param("roi_x", roi_x_, 0);
-        pnh_.param("roi_y", roi_y_, 0);
-        pnh_.param("roi_w", roi_w_, 0);
-        pnh_.param("roi_h", roi_h_, 0);
-
-        // Optional 3D workspace bounds in target_frame to reject background blobs.
-        pnh_.param("workspace_enable", workspace_enable_, false);
-        pnh_.param("workspace_min_x", workspace_min_x_, -10.0);
-        pnh_.param("workspace_max_x", workspace_max_x_, 10.0);
-        pnh_.param("workspace_min_y", workspace_min_y_, -10.0);
-        pnh_.param("workspace_max_y", workspace_max_y_, 10.0);
-        pnh_.param("workspace_min_z", workspace_min_z_, -10.0);
-        pnh_.param("workspace_max_z", workspace_max_z_, 10.0);
 
         pnh_.param("blur_kernel_size", blur_kernel_size_, 3);
         if (blur_kernel_size_ > 0 && blur_kernel_size_ % 2 == 0) {
@@ -182,18 +151,6 @@ private:
         pnh_.param("marker_size_m", marker_size_m_, 0.05);
         pnh_.param("enable_debug_images", enable_debug_images_, true);
         pnh_.param("smoothing_alpha", smoothing_alpha_, 0.35);
-
-        pnh_.param("enable_player_detection", enable_player_detection_, true);
-        pnh_.param("max_select_distance_m", max_select_distance_m_, 0.12);
-        pnh_.param("max_select_distance_px_fallback", max_select_distance_px_fallback_, 90.0);
-        pnh_.param("selection_cooldown_sec", selection_cooldown_sec_, 1.0);
-        pnh_.param("min_hand_area", min_hand_area_, 500.0);
-        pnh_.param("max_hand_area", max_hand_area_, 200000.0);
-        pnh_.param("selection_hold_sec", selection_hold_sec_, 3.0);
-        pnh_.param("require_hand_release", require_hand_release_, true);
-        pnh_.param("exclude_skin_from_block_masks", exclude_skin_from_block_masks_, true);
-        pnh_.param("skin_mask_open_iterations", skin_mask_open_iterations_, 1);
-        pnh_.param("skin_mask_close_iterations", skin_mask_close_iterations_, 1);
         pnh_.param("image_track_timeout_sec", image_track_timeout_sec_, 0.5);
         pnh_.param("max_candidate_jump_px", max_candidate_jump_px_, 120.0);
         pnh_.param("position_reset_timeout_sec", position_reset_timeout_sec_, 0.5);
@@ -204,30 +161,14 @@ private:
         if (depth_window_radius_ < 0) depth_window_radius_ = 0;
         depth_buffer_size_ = std::max(2, depth_buffer_size_);
         smoothing_alpha_ = std::max(0.0, std::min(1.0, smoothing_alpha_));
-        max_select_distance_m_ = std::max(0.01, max_select_distance_m_);
-        max_select_distance_px_fallback_ = std::max(1.0, max_select_distance_px_fallback_);
-        selection_cooldown_sec_ = std::max(0.0, selection_cooldown_sec_);
-        min_hand_area_ = std::max(50.0, min_hand_area_);
-        max_hand_area_ = std::max(min_hand_area_, max_hand_area_);
-        selection_hold_sec_ = std::max(0.0, selection_hold_sec_);
-        skin_mask_open_iterations_ = std::max(0, skin_mask_open_iterations_);
-        skin_mask_close_iterations_ = std::max(0, skin_mask_close_iterations_);
         image_track_timeout_sec_ = std::max(0.0, image_track_timeout_sec_);
         max_candidate_jump_px_ = std::max(1.0, max_candidate_jump_px_);
         position_reset_timeout_sec_ = std::max(0.0, position_reset_timeout_sec_);
         max_position_jump_m_ = std::max(0.0, max_position_jump_m_);
 
-
-        roi_x_ = std::max(0, roi_x_);
-        roi_y_ = std::max(0, roi_y_);
-        roi_w_ = std::max(0, roi_w_);
-        roi_h_ = std::max(0, roi_h_);
-
         initDefaultColors();
-        initDefaultSkinRanges();
         applyColorFilters();
         loadHsvRangesFromParams();
-        loadSkinRangesFromParams();
     }
 
     void initDefaultColors() {
@@ -245,12 +186,6 @@ private:
         color_configs_.push_back(ColorConfig{1, "green", {{40, 85, 70, 255, 50, 255}}});
         color_configs_.push_back(ColorConfig{2, "blue", {{95, 135, 70, 255, 50, 255}}});
         color_configs_.push_back(ColorConfig{3, "yellow", {{18, 40, 100, 255, 80, 255}}}); // widened H 20-35 -> 18-40
-    }
-
-    void initDefaultSkinRanges() {
-        skin_ranges_.clear();
-        skin_ranges_.push_back(HsvRange{0, 15, 40, 255, 40, 255});
-        skin_ranges_.push_back(HsvRange{165, 180, 40, 255, 40, 255});
     }
 
     void applyColorFilters() {
@@ -316,47 +251,6 @@ private:
             if (!parsed.empty()) {
                 cfg.ranges = parsed;
             }
-        }
-    }
-
-    void loadSkinRangesFromParams() {
-        XmlRpc::XmlRpcValue skin_cfg;
-        if (!pnh_.getParam("skin_hsv_ranges", skin_cfg)) {
-            return;
-        }
-
-        if (skin_cfg.getType() != XmlRpc::XmlRpcValue::TypeArray) {
-            ROS_WARN("Ignoring skin_hsv_ranges: expected list");
-            return;
-        }
-
-        std::vector<HsvRange> parsed;
-        for (int i = 0; i < skin_cfg.size(); ++i) {
-            if (skin_cfg[i].getType() != XmlRpc::XmlRpcValue::TypeArray || skin_cfg[i].size() != 6) {
-                ROS_WARN("Ignoring skin_hsv_ranges[%d]: expected [hmin,hmax,smin,smax,vmin,vmax]", i);
-                continue;
-            }
-
-            bool ok = true;
-            int vals[6] = {0};
-            for (int j = 0; j < 6; ++j) {
-                if (skin_cfg[i][j].getType() != XmlRpc::XmlRpcValue::TypeInt) {
-                    ok = false;
-                    break;
-                }
-                vals[j] = static_cast<int>(skin_cfg[i][j]);
-            }
-
-            if (!ok) {
-                ROS_WARN("Ignoring skin_hsv_ranges[%d]: all values must be integers", i);
-                continue;
-            }
-
-            parsed.push_back(HsvRange{vals[0], vals[1], vals[2], vals[3], vals[4], vals[5]});
-        }
-
-        if (!parsed.empty()) {
-            skin_ranges_ = parsed;
         }
     }
 
@@ -471,9 +365,7 @@ private:
         cv::cvtColor(bgr_smoothed, hsv, cv::COLOR_BGR2HSV);
 
         std::vector<memory_game::Block> blocks;
-        std::vector<FrameBlockDetection> frame_blocks;
         blocks.reserve(color_configs_.size());
-        frame_blocks.reserve(color_configs_.size());
 
         const ros::Time frame_stamp = color_stamp;
         pruneTrackingState(frame_stamp);
@@ -481,37 +373,18 @@ private:
         const bool publish_debug_images =
             enable_debug_images_ &&
             ((debug_mask_pub_.getNumSubscribers() > 0) ||
-             (debug_hand_mask_pub_.getNumSubscribers() > 0) ||
              (debug_overlay_pub_.getNumSubscribers() > 0));
-
-        cv::Mat hand_skin_mask;
-        cv::Mat block_skin_mask;
-        const bool need_hand_skin_mask = enable_player_detection_ ||
-                                    (enable_debug_images_ && debug_hand_mask_pub_.getNumSubscribers() > 0);
-        const bool use_skin_exclusion_for_blocks = exclude_skin_from_block_masks_;
-        if (need_hand_skin_mask || use_skin_exclusion_for_blocks) {
-            hand_skin_mask = buildSkinMask(hsv);
-            applyRoiMask(hand_skin_mask);
-        }
-        if (use_skin_exclusion_for_blocks) {
-            block_skin_mask = hand_skin_mask;
-        }
 
         cv::Mat debug_mask_accum;
         cv::Mat debug_overlay;
         if (publish_debug_images) {
             debug_mask_accum = cv::Mat::zeros(hsv.size(), CV_8UC1);
             debug_overlay = cv_ptr->image.clone();
-
-            cv::Rect roi;
-            if (computeRoiRect(hsv.size(), roi)) {
-                cv::rectangle(debug_overlay, roi, cv::Scalar(255, 255, 255), 2);
-            }
         }
 
         for (const ColorConfig& cfg : color_configs_) {
             // Per-color 2D detection in image space.
-            const DetectionResult det = detectColorBlob(hsv, cfg, block_skin_mask);
+            const DetectionResult det = detectColorBlob(hsv, cfg);
             if (publish_debug_images && !det.mask.empty()) {
                 cv::bitwise_or(debug_mask_accum, det.mask, debug_mask_accum);
             }
@@ -525,8 +398,8 @@ private:
             double chosen_area = 0.0;
             bool accepted_candidate = false;
 
-            // Try multiple valid contours for this color. If the largest blob is a bad background
-            // contour with invalid depth/workspace, we still want to fall back to the next candidate.
+            // Try multiple valid contours for this color. If the largest blob has bad depth,
+            // we still want to fall back to the next candidate.
             for (const int idx : ranked_indices) {
                 const cv::Point candidate = det.centroids[static_cast<size_t>(idx)];
 
@@ -548,10 +421,6 @@ private:
                     ROS_WARN_THROTTLE(2.0, "Rejected %s block: non-finite 3D position (%.3f, %.3f, %.3f)",
                                       cfg.name.c_str(),
                                       candidate_base.x, candidate_base.y, candidate_base.z);
-                    continue;
-                }
-
-                if (workspace_enable_ && !withinWorkspace(candidate_base)) {
                     continue;
                 }
 
@@ -579,7 +448,6 @@ private:
             block.is_selected = false;
 
             blocks.push_back(block);
-            frame_blocks.push_back(FrameBlockDetection{block, chosen_centroid.x, chosen_centroid.y});
 
             if (publish_debug_images) {
                 cv::circle(debug_overlay, chosen_centroid, 6, cv::Scalar(255, 255, 255), 2);
@@ -601,262 +469,16 @@ private:
         publishBlocks(blocks, color_msg->header.stamp);
         publishMarkers(blocks, color_msg->header.stamp);
 
-        if (enable_player_detection_) {
-            HandDetection hand;
-            if (detectHand(color_msg->header, hand_skin_mask, frame_blocks, hand)) {
-                if (publish_debug_images) {
-                    cv::circle(debug_overlay, hand.centroid, 5, cv::Scalar(0, 255, 255), -1);
-                }
-
-                if (!frame_blocks.empty()) {
-                    tryPublishPlayerSelection(frame_blocks, hand, color_msg->header);
-                } else {
-                    resetSelectionTrackingForHandPresent();
-                }
-            } else {
-                resetSelectionTrackingForNoHand();
-            }
-        }
-
         if (publish_debug_images) {
-            publishDebugImages(debug_mask_accum, hand_skin_mask, debug_overlay, color_msg->header);
+            publishDebugImages(debug_mask_accum, debug_overlay, color_msg->header);
         }
 
         ROS_DEBUG_THROTTLE(1.0, "Published %zu detected blocks", blocks.size());
     }
 
-    bool detectHand(const std_msgs::Header& header,
-                    const cv::Mat& skin_mask,
-                    const std::vector<FrameBlockDetection>& known_blocks,
-                    HandDetection& hand) {
-        std::vector<std::vector<cv::Point> > contours;
-        cv::findContours(skin_mask, contours, cv::RETR_EXTERNAL, cv::CHAIN_APPROX_SIMPLE);
-
-        // Collect valid-area skin blobs and their centroids.
-        struct Candidate {
-            int contour_idx;
-            cv::Point centroid;
-            double area;
-        };
-        std::vector<Candidate> candidates;
-        for (size_t i = 0; i < contours.size(); ++i) {
-            const double area = cv::contourArea(contours[i]);
-            if (area < min_hand_area_ || area > max_hand_area_) {
-                continue;
-            }
-            const cv::Moments m = cv::moments(contours[i]);
-            if (m.m00 <= 1e-6) {
-                continue;
-            }
-            candidates.push_back(Candidate{
-                static_cast<int>(i),
-                cv::Point(static_cast<int>(m.m10 / m.m00), static_cast<int>(m.m01 / m.m00)),
-                area});
-        }
-
-        if (candidates.empty()) {
-            return false;
-        }
-
-        int best_idx = -1;
-        if (!known_blocks.empty()) {
-            // Prefer the skin blob whose centroid is closest to any detected block.
-            // In a real lab the arm/shoulder is a larger skin blob but it's far from the blocks.
-            // The hand reaching toward a block will have its centroid near the block centroid.
-            double best_dist = std::numeric_limits<double>::max();
-            for (size_t i = 0; i < candidates.size(); ++i) {
-                for (const FrameBlockDetection& b : known_blocks) {
-                    const double dx = candidates[i].centroid.x - b.u;
-                    const double dy = candidates[i].centroid.y - b.v;
-                    const double dist = std::sqrt(dx * dx + dy * dy);
-                    if (dist < best_dist) {
-                        best_dist = dist;
-                        best_idx = static_cast<int>(i);
-                    }
-                }
-            }
-        } else {
-            // No block detections available — fall back to largest skin blob.
-            double best_area = 0.0;
-            for (size_t i = 0; i < candidates.size(); ++i) {
-                if (candidates[i].area > best_area) {
-                    best_area = candidates[i].area;
-                    best_idx = static_cast<int>(i);
-                }
-            }
-        }
-
-        if (best_idx < 0) {
-            return false;
-        }
-
-        // Centroid already computed when building candidates.
-        hand.centroid = candidates[static_cast<size_t>(best_idx)].centroid;
-        const int u = hand.centroid.x;
-        const int v = hand.centroid.y;
-
-        double depth_m = 0.0;
-        if (!readDepthMedianMeters(u, v, depth_m)) {
-            return true;
-        }
-        hand.has_base = projectAndTransformToBase(u, v, depth_m, header, hand.base);
-        return true;
-    }
-
-    void tryPublishPlayerSelection(const std::vector<FrameBlockDetection>& blocks,
-                                   const HandDetection& hand,
-                                   const std_msgs::Header& header) {
-        const ros::Time now = ros::Time::now();
-        const bool cooldown_ok = (now - last_selection_time_).toSec() >= selection_cooldown_sec_;
-
-        int best_id = -1;
-        double best_metric = hand.has_base ? (max_select_distance_m_ + 1.0) : (max_select_distance_px_fallback_ + 1.0);
-        std::string best_color;
-        std::string selection_type = hand.has_base ? "pointed_3d" : "pointed_2d";
-
-        for (const FrameBlockDetection& b : blocks) {
-            double metric = 0.0;
-            if (hand.has_base) {
-                const double dx = hand.base.x - b.block.position.x;
-                const double dy = hand.base.y - b.block.position.y;
-                const double dz = hand.base.z - b.block.position.z;
-                metric = std::sqrt(dx * dx + dy * dy + dz * dz);
-            } else {
-                const double dx = static_cast<double>(hand.centroid.x - b.u);
-                const double dy = static_cast<double>(hand.centroid.y - b.v);
-                metric = std::sqrt(dx * dx + dy * dy);
-            }
-
-            if (metric < best_metric) {
-                best_metric = metric;
-                best_id = b.block.id;
-                best_color = b.block.color;
-            }
-        }
-
-        const bool selection_within_gate =
-            hand.has_base ? (best_metric <= max_select_distance_m_) : (best_metric <= max_select_distance_px_fallback_);
-        if (best_id < 0 || !selection_within_gate) {
-            stable_candidate_id_ = -1;
-            stable_candidate_since_ = ros::Time(0);
-            // Hand is visible but not near any block — treat this as a "release".
-            // Without this, the player must wave their hand fully out of the camera view
-            // to re-arm after a selection, which is unnatural and confusing.
-            if (require_hand_release_) {
-                selection_armed_ = true;
-            }
-            return;
-        }
-
-        if (best_id != stable_candidate_id_) {
-            stable_candidate_id_ = best_id;
-            stable_candidate_since_ = now;
-        }
-
-        if ((now - stable_candidate_since_).toSec() < selection_hold_sec_) {
-            return;
-        }
-
-        if (!cooldown_ok) {
-            return;
-        }
-
-        if (!selection_armed_) {
-            return;
-        }
-
-        memory_game::PlayerSelection sel;
-        sel.header = header;
-        sel.header.frame_id = target_frame_;
-        sel.block_id = best_id;
-        sel.color = best_color;
-        sel.selection_type = selection_type;
-        sel.selection_time = now;
-        if (hand.has_base) {
-            sel.confidence = static_cast<float>(1.0 - best_metric / max_select_distance_m_);
-        } else {
-            sel.confidence = static_cast<float>(1.0 - best_metric / max_select_distance_px_fallback_);
-        }
-        selection_pub_.publish(sel);
-
-        last_selection_time_ = now;
-        last_selected_block_id_ = best_id;
-        stable_candidate_id_ = -1;
-        stable_candidate_since_ = ros::Time(0);
-        if (require_hand_release_) {
-            selection_armed_ = false;
-        }
-        ROS_INFO_THROTTLE(0.5, "Player selection: block %d (%s)", best_id, best_color.c_str());
-    }
-
-    void resetSelectionTrackingForHandPresent() {
-        stable_candidate_id_ = -1;
-        stable_candidate_since_ = ros::Time(0);
-    }
-
-    void resetSelectionTrackingForNoHand() {
-        stable_candidate_id_ = -1;
-        stable_candidate_since_ = ros::Time(0);
-        if (require_hand_release_) {
-            selection_armed_ = true;
-        }
-    }
-
-
-    bool computeRoiRect(const cv::Size& size, cv::Rect& roi) const {
-        if (!roi_enable_ || roi_w_ <= 0 || roi_h_ <= 0) {
-            return false;
-        }
-
-        cv::Rect requested(roi_x_, roi_y_, roi_w_, roi_h_);
-        cv::Rect bounds(0, 0, size.width, size.height);
-        roi = requested & bounds;
-        return roi.width > 0 && roi.height > 0;
-    }
-
-    void applyRoiMask(cv::Mat& mask) const {
-        cv::Rect roi;
-        if (!computeRoiRect(mask.size(), roi)) {
-            return;
-        }
-
-        cv::Mat out = cv::Mat::zeros(mask.size(), mask.type());
-        mask(roi).copyTo(out(roi));
-        mask = out;
-    }
-
-    bool withinWorkspace(const geometry_msgs::Point& p) const {
-        return p.x >= workspace_min_x_ && p.x <= workspace_max_x_ &&
-               p.y >= workspace_min_y_ && p.y <= workspace_max_y_ &&
-               p.z >= workspace_min_z_ && p.z <= workspace_max_z_;
-    }
-
-    cv::Mat buildSkinMask(const cv::Mat& hsv) const {
-        cv::Mat skin_mask = cv::Mat::zeros(hsv.size(), CV_8UC1);
-        for (const HsvRange& r : skin_ranges_) {
-            cv::Mat partial;
-            cv::inRange(hsv,
-                        cv::Scalar(r.h_min, r.s_min, r.v_min),
-                        cv::Scalar(r.h_max, r.s_max, r.v_max),
-                        partial);
-            cv::bitwise_or(skin_mask, partial, skin_mask);
-        }
-
-        if (skin_mask_open_iterations_ > 0) {
-            cv::morphologyEx(skin_mask, skin_mask, cv::MORPH_OPEN, cv::Mat(), cv::Point(-1, -1),
-                             skin_mask_open_iterations_);
-        }
-        if (skin_mask_close_iterations_ > 0) {
-            cv::morphologyEx(skin_mask, skin_mask, cv::MORPH_CLOSE, cv::Mat(), cv::Point(-1, -1),
-                             skin_mask_close_iterations_);
-        }
-
-        return skin_mask;
-    }
 
     DetectionResult detectColorBlob(const cv::Mat& hsv,
-                                    const ColorConfig& cfg,
-                                    const cv::Mat& skin_mask) const {
+                                    const ColorConfig& cfg) const {
         DetectionResult out;
         cv::Mat mask = cv::Mat::zeros(hsv.size(), CV_8UC1);
 
@@ -868,23 +490,12 @@ private:
                         partial);
             cv::bitwise_or(mask, partial, mask);
         }
-
-        // 1. Crop to ROI first — no point doing morph on pixels we will throw away,
-        //    and blobs straddling the ROI boundary would get incorrect morph results.
-        applyRoiMask(mask);
-
-        // 2. Remove skin-colored pixels before morphological ops so they don't get
-        //    merged into block blobs by dilation.
-        if (exclude_skin_from_block_masks_ && !skin_mask.empty()) {
-            mask.setTo(0, skin_mask);
-        }
-
-        // 3. CLOSE first: fills glare spots, shadows, and occlusion holes inside the block.
+        // CLOSE first: fills glare spots, shadows, and occlusion holes inside the block.
         //    Doing open first would erode a block with a hole into two fragments, then fail area filter.
         if (mask_close_iterations_ > 0) {
             cv::morphologyEx(mask, mask, cv::MORPH_CLOSE, cv::Mat(), cv::Point(-1, -1), mask_close_iterations_);
         }
-        // 4. OPEN second: removes small isolated noise blobs that survived after closing.
+        // OPEN second: removes small isolated noise blobs that survived after closing.
         if (mask_open_iterations_ > 0) {
             cv::morphologyEx(mask, mask, cv::MORPH_OPEN, cv::Mat(), cv::Point(-1, -1), mask_open_iterations_);
         }
@@ -1210,7 +821,6 @@ private:
     }
 
     void publishDebugImages(const cv::Mat& mask,
-                            const cv::Mat& hand_mask,
                             const cv::Mat& overlay,
                             const std_msgs::Header& header) {
         if (!enable_debug_images_) {
@@ -1220,11 +830,6 @@ private:
         if (!mask.empty() && debug_mask_pub_) {
             cv_bridge::CvImage mask_img(header, sensor_msgs::image_encodings::MONO8, mask);
             debug_mask_pub_.publish(mask_img.toImageMsg());
-        }
-
-        if (!hand_mask.empty() && debug_hand_mask_pub_) {
-            cv_bridge::CvImage hand_mask_img(header, sensor_msgs::image_encodings::MONO8, hand_mask);
-            debug_hand_mask_pub_.publish(hand_mask_img.toImageMsg());
         }
 
         if (!overlay.empty() && debug_overlay_pub_) {
@@ -1251,10 +856,8 @@ private:
 
     ros::Publisher blocks_pub_;
     ros::Publisher markers_pub_;
-    ros::Publisher selection_pub_;
 
     image_transport::Publisher debug_mask_pub_;
-    image_transport::Publisher debug_hand_mask_pub_;
     image_transport::Publisher debug_overlay_pub_;
 
     std::string color_topic_;
@@ -1263,21 +866,6 @@ private:
     std::string target_frame_;
     std::string markers_topic_;
     bool disable_red_ = false;
-
-
-    bool roi_enable_ = false;
-    int roi_x_ = 0;
-    int roi_y_ = 0;
-    int roi_w_ = 0;
-    int roi_h_ = 0;
-
-    bool workspace_enable_ = false;
-    double workspace_min_x_ = -10.0;
-    double workspace_max_x_ = 10.0;
-    double workspace_min_y_ = -10.0;
-    double workspace_max_y_ = 10.0;
-    double workspace_min_z_ = -10.0;
-    double workspace_max_z_ = 10.0;
 
     int blur_kernel_size_ = 3;
     double min_block_area_;
@@ -1294,30 +882,12 @@ private:
     double marker_size_m_;
     bool enable_debug_images_;
     double smoothing_alpha_;
-
-    bool enable_player_detection_;
-    double max_select_distance_m_;
-    double max_select_distance_px_fallback_;
-    double selection_cooldown_sec_;
-    double selection_hold_sec_;
-    double min_hand_area_;
-    double max_hand_area_;
-    bool require_hand_release_;
-    bool exclude_skin_from_block_masks_ = true;
-    int skin_mask_open_iterations_ = 1;
-    int skin_mask_close_iterations_ = 1;
-    ros::Time last_selection_time_;
-    int last_selected_block_id_;
-    int stable_candidate_id_ = -1;
-    ros::Time stable_candidate_since_;
-    bool selection_armed_ = true;
     double image_track_timeout_sec_ = 0.5;
     double max_candidate_jump_px_ = 120.0;
     double position_reset_timeout_sec_ = 0.5;
     double max_position_jump_m_ = 0.10;
 
     std::vector<ColorConfig> color_configs_;
-    std::vector<HsvRange> skin_ranges_;
 
     cv::Mat latest_depth_;
     std::string latest_depth_encoding_;
@@ -1345,3 +915,4 @@ int main(int argc, char** argv) {
     ros::spin();
     return 0;
 }
+

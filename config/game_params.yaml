@@ -32,23 +32,6 @@ vision_node:
   target_frame: "panda_link0"
   markers_topic: "/vision/visualization_marker_array"
   disable_red: true
-
-
-  # Optional ROI filter (pixel coords in the color image). Use this to ignore background.
-  roi_enable: false
-  roi_x: 0
-  roi_y: 0
-  roi_w: 0
-  roi_h: 0
-
-  # Optional 3D workspace filter in target_frame (meters).
-  workspace_enable: false
-  workspace_min_x: -10.0
-  workspace_max_x: 10.0
-  workspace_min_y: -10.0
-  workspace_max_y: 10.0
-  workspace_min_z: -10.0
-  workspace_max_z: 10.0
   
   # Pre-processing: Gaussian blur before BGR->HSV conversion.
   # Reduces pixel-level camera noise that causes hue jitter at block edges.
@@ -71,26 +54,10 @@ vision_node:
   marker_size_m: 0.05
   enable_debug_images: true
   smoothing_alpha: 0.35     # 0=no update, 1=no smoothing
-
-  # Player selection (real hand detection)
-  enable_player_detection: true
-  max_select_distance_m: 0.12   # hand within this distance of block (meters)
-  max_select_distance_px_fallback: 90  # fallback image-space gate if hand depth/TF is unavailable
-  selection_cooldown_sec: 1.0   # min time between selections
-  selection_hold_sec: 3.0       # hand must stay on same block this long before selection
-  min_hand_area: 500            # min skin blob area (pixels)
-  max_hand_area: 200000         # max skin blob area (pixels)
-  require_hand_release: true
-  exclude_skin_from_block_masks: true
-  skin_mask_open_iterations: 1
-  skin_mask_close_iterations: 1
   image_track_timeout_sec: 0.5
   max_candidate_jump_px: 120
   position_reset_timeout_sec: 0.5
   max_position_jump_m: 0.10
-  skin_hsv_ranges:
-    - [0, 15, 40, 255, 40, 255]
-    - [165, 180, 40, 255, 40, 255]
 
   # HSV ranges format: [hmin, hmax, smin, smax, vmin, vmax]
   hsv_ranges:
