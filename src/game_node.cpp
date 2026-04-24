@@ -1,5 +1,3 @@
-
-
 #include <ros/ros.h>
 #include <memory_game/BlockArray.h>
 #include <memory_game/PlayerSelection.h>
@@ -38,7 +36,6 @@ private:
     ros::Publisher score_pub_;
 
     ros::Timer start_timer_;
-    ros::Timer show_timer_;
     ros::Timer show_failsafe_timer_;
     ros::Timer round_timer_;
     ros::Timer player_timeout_timer_;
@@ -53,7 +50,6 @@ private:
 
     int score_;
     int level_;
-    int show_index_;
     int player_index_;
 
     bool waiting_for_motion_;
@@ -97,7 +93,6 @@ public:
           current_state_(GameState::IDLE),
           score_(0),
           level_(1),
-          show_index_(0),
           player_index_(0),
           waiting_for_motion_(false),
           motion_started_for_sequence_(false),
@@ -419,22 +414,6 @@ private:
         startGame();
     }
 
-    void showHoldCallback(const ros::TimerEvent&) {
-        if (between_show_sec_ > 1e-6) {
-            show_timer_ = nh_.createTimer(
-                ros::Duration(between_show_sec_),
-                &GameNode::showNextCallback,
-                this,
-                true);
-        } else {
-            showNextBlock();
-        }
-    }
-
-    void showNextCallback(const ros::TimerEvent&) {
-        showNextBlock();
-    }
-
     void showFailsafeCallback(const ros::TimerEvent&) {
         if (current_state_ == GameState::SHOWING_SEQUENCE && waiting_for_motion_) {
             if (!motion_started_for_sequence_) {
@@ -460,7 +439,6 @@ private:
         waiting_for_motion_ = false;
         motion_started_for_sequence_ = false;
         sequence_targets_completed_ = 0;
-        show_timer_.stop();
         show_failsafe_timer_.stop();
         target_sub_wait_timer_.stop();
         player_timeout_timer_.stop();
@@ -529,7 +507,6 @@ private:
     void generateAndStartSequence() {
         sequence_.clear();
         player_input_.clear();
-        show_index_ = 0;
         player_index_ = 0;
         waiting_for_motion_ = false;
         motion_started_for_sequence_ = false;
@@ -631,57 +608,6 @@ private:
             true);
     }
 
-    void showNextBlock() {
-        if (current_state_ != GameState::SHOWING_SEQUENCE) {
-            return;
-        }
-
-        if (show_index_ >= static_cast<int>(sequence_.size())) {
-            current_state_ = GameState::WAITING_PLAYER;
-            publishState("WAITING_PLAYER");
-            ROS_INFO("Sequence complete. Waiting for player input...");
-            resetPlayerTimeout();
-            return;
-        }
-
-        int block_id = sequence_[show_index_];
-        memory_game::Block target;
-        if (!tryMakeTargetBlock(block_id, target)) {
-            publishState("WAITING_FOR_BLOCKS");
-            ROS_WARN_THROTTLE(2.0, "Current show target %d missing from /detected_blocks. Retrying.", block_id);
-            show_timer_ = nh_.createTimer(
-                ros::Duration(blocks_wait_sec_),
-                &GameNode::showNextCallback,
-                this,
-                true);
-            return;
-        }
-        target_pub_.publish(target);
-
-        ROS_INFO("Showing block %d (%d/%zu)",
-                 block_id,
-                 show_index_ + 1,
-                 sequence_.size());
-
-        show_index_++;
-        waiting_for_motion_ = true;
-
-        if (!have_motion_state_) {
-            waiting_for_motion_ = false;
-            show_timer_ = nh_.createTimer(
-                ros::Duration(show_hold_sec_),
-                &GameNode::showHoldCallback,
-                this,
-                true);
-        } else {
-            show_failsafe_timer_ = nh_.createTimer(
-                ros::Duration(std::max(3.0, show_hold_sec_ + between_show_sec_ + 2.0)),
-                &GameNode::showFailsafeCallback,
-                this,
-                true);
-        }
-    }
-
     void checkSequence() {
         bool correct = true;
 
@@ -730,7 +656,6 @@ private:
         publishState("GAME_OVER");
 
         player_timeout_timer_.stop();
-        show_timer_.stop();
         show_failsafe_timer_.stop();
         round_timer_.stop();
         target_sub_wait_timer_.stop();
