@@ -127,6 +127,18 @@ class PlayerSelectionNode:
         rospy.loginfo("Initialized %d slots.", len(self.slots))
 
     def evaluate_slots(self, observed: Dict[int, object], stamp: rospy.Time) -> None:
+        if len(observed) == 0:
+            if self.all_blocks_missing_since.is_zero():
+                self.all_blocks_missing_since = stamp
+            elif (stamp - self.all_blocks_missing_since).to_sec() >= self.reset_delay_sec:
+                rospy.logwarn("All blocks missing for %.1fs. Resetting slots for a new game.", self.reset_delay_sec)
+                self.slots_initialized = False
+                self.slots.clear()
+                self.all_blocks_missing_since = rospy.Time(0)
+                return
+        else:
+            self.all_blocks_missing_since = rospy.Time(0)
+
         for slot in self.slots.values():
             current_block = observed.get(slot.block_id)
             slot_occupied = current_block is not None and self.matches_slot(slot, current_block)
