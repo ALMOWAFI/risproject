@@ -14,14 +14,13 @@ Inputs:
 
 Outputs:
 - `/detected_blocks` (`memory_game/BlockArray`)
-- `/visualization_marker_array` (`visualization_msgs/MarkerArray`)
 - optional debug images (`/vision/debug_mask`, `/vision/debug_overlay`)
 
 ## 2. Startup and Parameters
 
 In `VisionNode::VisionNode()`:
 - `loadParams()` loads topics + tuning values.
-- Publishers are created for blocks and markers.
+- Publishers are created for blocks.
 - Debug publishers are enabled only when `enable_debug_images` is true.
 - Subscribers are started for color, depth, and camera info.
 
@@ -92,11 +91,6 @@ For each valid block:
 Blocks are sorted by ID before publishing to keep deterministic ordering.
 
 ## 9. Visualization
-
-`publishMarkers()`:
-- sends `DELETEALL` first
-- publishes cube markers at each block position
-- uses color-specific marker colors
 
 Debug mode overlays:
 - binary accumulated mask image

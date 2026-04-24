@@ -10,29 +10,7 @@ import tf2_ros
 from cv_bridge import CvBridge, CvBridgeError
 from geometry_msgs.msg import PointStamped
 from sensor_msgs.msg import CameraInfo, Image
-from std_msgs.msg import ColorRGBA
-from visualization_msgs.msg import Marker, MarkerArray
-
 from memory_game.msg import Block, BlockArray
-
-
-def make_color(r, g, b, a=1.0):
-    msg = ColorRGBA()
-    msg.r = r
-    msg.g = g
-    msg.b = b
-    msg.a = a
-    return msg
-
-
-def marker_color(name):
-    if name == "green":
-        return make_color(0.0, 1.0, 0.0)
-    if name == "blue":
-        return make_color(0.0, 0.2, 1.0)
-    if name == "yellow":
-        return make_color(1.0, 1.0, 0.0)
-    return make_color(0.7, 0.7, 0.7)
 
 
 class VisionNodeFullPython:
@@ -46,7 +24,6 @@ class VisionNodeFullPython:
         self.depth_topic = rospy.get_param("~depth_topic", "/realsense/aligned_depth_to_color/image_raw")
         self.camera_info_topic = rospy.get_param("~camera_info_topic", "/realsense/color/camera_info")
         self.target_frame = rospy.get_param("~target_frame", "panda_link0")
-        self.markers_topic = rospy.get_param("~markers_topic", "/vision_python/visualization_marker_array")
         self.disable_red = rospy.get_param("~disable_red", True)
         self.min_block_area = float(rospy.get_param("~min_block_area", 500.0))
         self.max_block_area = float(rospy.get_param("~max_block_area", 60000.0))
@@ -69,7 +46,6 @@ class VisionNodeFullPython:
         self.workspace_max_y = float(rospy.get_param("~workspace_max_y", 10.0))
         self.workspace_min_z = float(rospy.get_param("~workspace_min_z", -10.0))
         self.workspace_max_z = float(rospy.get_param("~workspace_max_z", 10.0))
-        self.marker_size_m = float(rospy.get_param("~marker_size_m", 0.05))
 
         self.color_configs = [
             (0, "red", [(0, 15, 60, 255, 30, 255), (165, 180, 60, 255, 30, 255)]),
@@ -86,7 +62,6 @@ class VisionNodeFullPython:
         self.has_camera_model = False
 
         self.blocks_pub = rospy.Publisher("/detected_blocks", BlockArray, queue_size=10)
-        self.markers_pub = rospy.Publisher(self.markers_topic, MarkerArray, queue_size=10)
         self.debug_mask_pub = rospy.Publisher("/vision_python/debug_mask", Image, queue_size=1)
         self.debug_overlay_pub = rospy.Publisher("/vision_python/debug_overlay", Image, queue_size=1)
 
@@ -179,7 +154,6 @@ class VisionNodeFullPython:
 
         blocks.sort(key=lambda block: block.id)
         self.publish_blocks(blocks, msg.header.stamp)
-        self.publish_markers(blocks, msg.header.stamp)
 
         if self.enable_debug_images:
             self.publish_debug_image(self.debug_mask_pub, debug_mask, msg.header, "mono8")
@@ -292,34 +266,6 @@ class VisionNodeFullPython:
         msg.header.frame_id = self.target_frame
         msg.blocks = blocks
         self.blocks_pub.publish(msg)
-
-    def publish_markers(self, blocks, stamp):
-        array = MarkerArray()
-        clear = Marker()
-        clear.header.frame_id = self.target_frame
-        clear.header.stamp = stamp
-        clear.ns = "blocks"
-        clear.id = 0
-        clear.action = Marker.DELETEALL
-        array.markers.append(clear)
-
-        for block in blocks:
-            marker = Marker()
-            marker.header.frame_id = self.target_frame
-            marker.header.stamp = stamp
-            marker.ns = "blocks"
-            marker.id = block.id
-            marker.type = Marker.CUBE
-            marker.action = Marker.ADD
-            marker.pose.position = block.position
-            marker.pose.orientation.w = 1.0
-            marker.scale.x = self.marker_size_m
-            marker.scale.y = self.marker_size_m
-            marker.scale.z = self.marker_size_m
-            marker.color = marker_color(block.color)
-            array.markers.append(marker)
-
-        self.markers_pub.publish(array)
 
     def publish_debug_image(self, publisher, image, header, encoding):
         if publisher.get_num_connections() == 0:

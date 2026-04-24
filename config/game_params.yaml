@@ -30,7 +30,6 @@ vision_node:
   depth_topic: "/realsense/aligned_depth_to_color/image_raw"
   camera_info_topic: "/realsense/color/camera_info"
   target_frame: "panda_link0"
-  markers_topic: "/vision/visualization_marker_array"
   disable_red: true
   
   # Pre-processing: Gaussian blur before BGR->HSV conversion.
@@ -51,7 +50,6 @@ vision_node:
   max_depth_age_sec: 0.5    # max age for preferred sync; falls back to newest frame if exceeded
 
   # Output behavior
-  marker_size_m: 0.05
   enable_debug_images: true
   smoothing_alpha: 0.35     # 0=no update, 1=no smoothing
   image_track_timeout_sec: 0.5

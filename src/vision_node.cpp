@@ -4,7 +4,6 @@
  *
  * This node detects colored blocks from RGB + depth streams and publishes:
  *   - /detected_blocks (memory_game/BlockArray)
- *   - /visualization_marker_array (visualization_msgs/MarkerArray)
  *   - debug image topics for mask/overlay inspection
  * Player selection is handled separately by scripts/player_selection.py.
  *
@@ -43,8 +42,6 @@
 #include <tf2_geometry_msgs/tf2_geometry_msgs.h>
 #include <tf2_ros/buffer.h>
 #include <tf2_ros/transform_listener.h>
-#include <visualization_msgs/Marker.h>
-#include <visualization_msgs/MarkerArray.h>
 #include <xmlrpcpp/XmlRpcValue.h>
 
 namespace {
@@ -70,23 +67,6 @@ struct DetectionResult {
     std::vector<double> areas;
 };
 
-std_msgs::ColorRGBA MakeColor(float r, float g, float b, float a = 1.0f) {
-    std_msgs::ColorRGBA c;
-    c.r = r;
-    c.g = g;
-    c.b = b;
-    c.a = a;
-    return c;
-}
-
-std_msgs::ColorRGBA MarkerColor(const std::string& color_name) {
-    if (color_name == "red") return MakeColor(1.0f, 0.0f, 0.0f);
-    if (color_name == "green") return MakeColor(0.0f, 1.0f, 0.0f);
-    if (color_name == "blue") return MakeColor(0.0f, 0.2f, 1.0f);
-    if (color_name == "yellow") return MakeColor(1.0f, 1.0f, 0.0f);
-    return MakeColor(0.7f, 0.7f, 0.7f);
-}
-
 }  // namespace
 
 namespace memory_game_vision {
@@ -104,8 +84,6 @@ public:
         loadParams();
 
         blocks_pub_ = nh_.advertise<memory_game::BlockArray>("/detected_blocks", 10);
-        markers_pub_ = nh_.advertise<visualization_msgs::MarkerArray>(markers_topic_, 10);
-
         if (enable_debug_images_) {
             debug_mask_pub_ = it_.advertise("/vision/debug_mask", 1);
             debug_overlay_pub_ = it_.advertise("/vision/debug_overlay", 1);
@@ -120,7 +98,6 @@ public:
         ROS_INFO("depth_topic=%s", depth_topic_.c_str());
         ROS_INFO("camera_info_topic=%s", camera_info_topic_.c_str());
         ROS_INFO("target_frame=%s", target_frame_.c_str());
-        ROS_INFO("markers_topic=%s", markers_topic_.c_str());
     }
 
 private:
@@ -129,7 +106,6 @@ private:
         pnh_.param("depth_topic", depth_topic_, std::string("/realsense/aligned_depth_to_color/image_raw"));
         pnh_.param("camera_info_topic", camera_info_topic_, std::string("/realsense/color/camera_info"));
         pnh_.param("target_frame", target_frame_, std::string("panda_link0"));
-        pnh_.param("markers_topic", markers_topic_, std::string("/vision/visualization_marker_array"));
         pnh_.param("disable_red", disable_red_, true);
 
         pnh_.param("blur_kernel_size", blur_kernel_size_, 3);
@@ -148,7 +124,6 @@ private:
         pnh_.param("max_depth_age_sec", max_depth_age_sec_, 1.0);
         pnh_.param("depth_buffer_size", depth_buffer_size_, 10);
 
-        pnh_.param("marker_size_m", marker_size_m_, 0.05);
         pnh_.param("enable_debug_images", enable_debug_images_, true);
         pnh_.param("smoothing_alpha", smoothing_alpha_, 0.35);
         pnh_.param("image_track_timeout_sec", image_track_timeout_sec_, 0.5);
@@ -467,7 +442,6 @@ private:
         });
 
         publishBlocks(blocks, color_msg->header.stamp);
-        publishMarkers(blocks, color_msg->header.stamp);
 
         if (publish_debug_images) {
             publishDebugImages(debug_mask_accum, debug_overlay, color_msg->header);
@@ -788,38 +762,6 @@ private:
         blocks_pub_.publish(out);
     }
 
-    void publishMarkers(const std::vector<memory_game::Block>& blocks, const ros::Time& stamp) {
-        visualization_msgs::MarkerArray arr;
-
-        // Clear old markers first so RViz reflects only current detections.
-        visualization_msgs::Marker clear;
-        clear.header.frame_id = target_frame_;
-        clear.header.stamp = stamp;
-        clear.ns = "blocks";
-        clear.id = 0;
-        clear.action = visualization_msgs::Marker::DELETEALL;
-        arr.markers.push_back(clear);
-
-        for (const memory_game::Block& b : blocks) {
-            visualization_msgs::Marker m;
-            m.header.frame_id = target_frame_;
-            m.header.stamp = stamp;
-            m.ns = "blocks";
-            m.id = b.id;
-            m.type = visualization_msgs::Marker::CUBE;
-            m.action = visualization_msgs::Marker::ADD;
-            m.pose.position = b.position;
-            m.pose.orientation.w = 1.0;
-            m.scale.x = marker_size_m_;
-            m.scale.y = marker_size_m_;
-            m.scale.z = marker_size_m_;
-            m.color = MarkerColor(b.color);
-            arr.markers.push_back(m);
-        }
-
-        markers_pub_.publish(arr);
-    }
-
     void publishDebugImages(const cv::Mat& mask,
                             const cv::Mat& overlay,
                             const std_msgs::Header& header) {
@@ -855,7 +797,6 @@ private:
     ros::Subscriber camera_info_sub_;
 
     ros::Publisher blocks_pub_;
-    ros::Publisher markers_pub_;
 
     image_transport::Publisher debug_mask_pub_;
     image_transport::Publisher debug_overlay_pub_;
@@ -864,7 +805,6 @@ private:
     std::string depth_topic_;
     std::string camera_info_topic_;
     std::string target_frame_;
-    std::string markers_topic_;
     bool disable_red_ = false;
 
     int blur_kernel_size_ = 3;
@@ -879,7 +819,6 @@ private:
     double max_depth_age_sec_;
     int depth_buffer_size_;
 
-    double marker_size_m_;
     bool enable_debug_images_;
     double smoothing_alpha_;
     double image_track_timeout_sec_ = 0.5;
@@ -910,6 +849,13 @@ private:
 }  // namespace memory_game_vision
 
 int main(int argc, char** argv) {
+    ros::init(argc, argv, "vision_node");
+    memory_game_vision::VisionNode node;
+    ros::spin();
+    return 0;
+}
+
+t argc, char** argv) {
     ros::init(argc, argv, "vision_node");
     memory_game_vision::VisionNode node;
     ros::spin();
