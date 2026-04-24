@@ -1,94 +1,90 @@
 # Game parameters configuration
 
 game_node:
-  # These names match src/game_node.cpp (private params under /game_node/*)
   num_blocks: 4
   base_length: 3
   length_per_level: 1
+  start_delay_sec: 0.8
+  player_timeout_sec: 30.0
+  no_immediate_repeat: true
+  
   show_hold_sec: 1.0
   between_show_sec: 0.3
   round_pause_sec: 1.0
-  player_timeout_sec: 30.0
-  start_delay_sec: 0.8
-  no_immediate_repeat: true
-  target_frame: "panda_link0"
-  default_x: 0.40
-  default_y: 0.00
-  default_z: 0.05
+
   disable_red: true
   require_detected_blocks: true
   min_detected_blocks_required: 3
   blocks_wait_sec: 0.5
-  block_freshness_sec: 0.20   # keep recent block poses briefly to survive one-frame vision dropouts
-  # Batch publishing /target_block can be dropped if motion isn't subscribed yet.
+  block_freshness_sec: 0.20
+  
+  target_frame: "panda_link0"
   target_subscriber_poll_sec: 0.2
   target_subscriber_timeout_sec: 5.0
-    
+  
+  default_x: 0.40
+  default_y: 0.00
+  default_z: 0.05
+
 vision_node:
-  # Camera topics
   color_topic: "/realsense/color/image_raw"
   depth_topic: "/realsense/aligned_depth_to_color/image_raw"
   camera_info_topic: "/realsense/color/camera_info"
   target_frame: "panda_link0"
-  disable_red: true
   
-  # Pre-processing: Gaussian blur before BGR->HSV conversion.
-  # Reduces pixel-level camera noise that causes hue jitter at block edges.
-  # Must be odd. Set to 0 or 1 to disable.
+  disable_red: true
+  enable_debug_images: true
+  
   blur_kernel_size: 3
-
-  # Contour filtering and mask cleanup
-  min_block_area: 500       # pixels
-  max_block_area: 60000     # pixels
-  mask_open_iterations: 2
+  
+  min_block_area: 500
+  max_block_area: 60000
   mask_close_iterations: 2
+  mask_open_iterations: 2
 
-  # Depth robustness
-  depth_window_radius: 2    # median window radius in pixels
+  depth_window_radius: 2
   min_depth_m: 0.10
   max_depth_m: 2.50
-  max_depth_age_sec: 0.5    # max age for preferred sync; falls back to newest frame if exceeded
+  max_depth_age_sec: 0.5
 
-  # Output behavior
-  enable_debug_images: true
-  smoothing_alpha: 0.35     # 0=no update, 1=no smoothing
+  smoothing_alpha: 0.35
   image_track_timeout_sec: 0.5
-  max_candidate_jump_px: 120
   position_reset_timeout_sec: 0.5
+  max_candidate_jump_px: 120
   max_position_jump_m: 0.10
 
-  # HSV ranges format: [hmin, hmax, smin, smax, vmin, vmax]
   hsv_ranges:
     red:
-      - [0, 15, 90, 255, 50, 255]       # S_min raised 60->90 to reject low-sat table surfaces
-      - [165, 180, 90, 255, 50, 255]    # same for upper red wrap-around
+      - [0, 15, 90, 255, 50, 255]
+      - [165, 180, 90, 255, 50, 255]
     green:
       - [40, 85, 70, 255, 50, 255]
     blue:
       - [95, 135, 70, 255, 50, 255]
     yellow:
-      - [18, 40, 100, 255, 80, 255]     # H widened 20-35 -> 18-40 for lighting robustness
+      - [18, 40, 100, 255, 80, 255]
 
 player_selection:
   target_frame: "panda_link0"
   selection_type: "slot_disappeared"
+  
+  min_slots_to_initialize: 3
+  baseline_settle_sec: 0.7
+  reset_delay_sec: 3.0
+  
   max_slot_distance_m: 0.08
   missing_hold_sec: 0.6
   selection_cooldown_sec: 0.8
-  min_slots_to_initialize: 3
-  baseline_settle_sec: 0.7
-    
+
 motion_node:
-  # Robot parameters
   robot_base_frame: "panda_link0"
   end_effector_frame: "panda_link8"
   
-  # Motion parameters
-  planning_time: 5.0  # seconds
-  max_velocity: 0.1  # m/s
-  max_acceleration: 0.1  # m/s^2
+  planning_time: 5.0
+  max_velocity: 0.1
+  max_acceleration: 0.1
+  pointing_offset: 0.1
   
-  # Home position (x, y, z, qx, qy, qz, qw)
   home_position:
     x: 0.3
     y: 0.0
@@ -97,15 +93,12 @@ motion_node:
     qy: 0.0
     qz: 0.0
     qw: 1.0
-  
-  # Pointing offset above block
-  pointing_offset: 0.1  # meters
-
 
 motion_moveit_node:
   planning_group: "panda_arm"
   pose_frame: "panda_link0"
   require_pose_frame_match: true
+  
   workspace_enable: false
   workspace_min_x: -10.0
   workspace_max_x: 10.0
