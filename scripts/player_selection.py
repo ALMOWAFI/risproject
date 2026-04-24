@@ -5,7 +5,6 @@ from dataclasses import dataclass
 from typing import Dict, Optional
 
 import rospy
-from std_msgs.msg import String
 
 from memory_game.msg import BlockArray, PlayerSelection
 
@@ -26,73 +25,71 @@ class PlayerSelectionNode:
         self.target_frame = rospy.get_param("~target_frame", "panda_link0")
         self.selection_type = rospy.get_param("~selection_type", "slot_disappeared")
         self.max_slot_distance_m = float(rospy.get_param("~max_slot_distance_m", 0.08))
-        self.missing_hold_sec = float(rospy.get_param("~missing_hold_sec", 1.0))
-        self.selection_cooldown_sec = float(rospy.get_param("~selection_cooldown_sec", 1.0))
-        # Default to active mode so the node can be tested without the full game stack.
-        self.only_waiting_player = bool(rospy.get_param("~only_waiting_player", False))
+        self.missing_hold_sec = float(rospy.get_param("~missing_hold_sec", 0.6))
+        self.selection_cooldown_sec = float(rospy.get_param("~selection_cooldown_sec", 0.8))
         self.min_slots_to_initialize = int(rospy.get_param("~min_slots_to_initialize", 3))
+        # Wait a short moment after enough blocks are visible before freezing the slot baseline.
+        self.baseline_settle_sec = float(rospy.get_param("~baseline_settle_sec", 0.7))
 
-        self.current_game_state = "IDLE"
         self.last_selection_time = rospy.Time(0)
         self.latest_observed: Dict[int, object] = {}
         self.latest_observed_stamp = rospy.Time(0)
         self.slots_initialized = False
         self.slots: Dict[int, SlotState] = {}
+        self.baseline_candidate_since = rospy.Time(0)
 
         self.selection_pub = rospy.Publisher("/player_selection", PlayerSelection, queue_size=10)
         rospy.Subscriber("/detected_blocks", BlockArray, self.blocks_callback, queue_size=10)
-        rospy.Subscriber("/game_state", String, self.game_state_callback, queue_size=10)
 
-        rospy.loginfo("player_selection.py ready")
-
-    def game_state_callback(self, msg: String) -> None:
-        previous_state = self.current_game_state
-        self.current_game_state = msg.data
-        if self.current_game_state == "WAITING_PLAYER" and previous_state != "WAITING_PLAYER":
-            self.start_new_round()
+        rospy.loginfo(
+            "player_selection.py ready: node=%s always_on=true "
+            "min_slots=%d baseline_settle_sec=%.2f max_slot_distance_m=%.3f",
+            rospy.get_name(),
+            self.min_slots_to_initialize,
+            self.baseline_settle_sec,
+            self.max_slot_distance_m,
+        )
 
     def blocks_callback(self, msg: BlockArray) -> None:
+        received_at = rospy.Time.now()
         stamp = msg.header.stamp if msg.header.stamp != rospy.Time() else rospy.Time.now()
         observed = {block.id: block for block in msg.blocks}
         self.latest_observed = observed
         self.latest_observed_stamp = stamp
 
-        if self.only_waiting_player and self.current_game_state != "WAITING_PLAYER":
-            rospy.logwarn_throttle(
-                2.0,
-                "player_selection.py idle: waiting for WAITING_PLAYER (current=%s)",
-                self.current_game_state,
-            )
-            return
-
         if not self.slots_initialized:
+            if len(self.latest_observed) < self.min_slots_to_initialize:
+                self.baseline_candidate_since = rospy.Time(0)
+                rospy.logwarn_throttle(
+                    2.0,
+                    "player_selection.py waiting for enough slots to initialize (%d/%d)",
+                    len(self.latest_observed),
+                    self.min_slots_to_initialize,
+                )
+                return
+
+            if self.baseline_candidate_since == rospy.Time():
+                self.baseline_candidate_since = received_at
+                rospy.loginfo(
+                    "player_selection.py saw enough blocks; waiting %.2fs before capturing baseline",
+                    self.baseline_settle_sec,
+                )
+                return
+
+            if (received_at - self.baseline_candidate_since).to_sec() < self.baseline_settle_sec:
+                rospy.logwarn_throttle(
+                    2.0,
+                    "player_selection.py settling before baseline capture (%.2fs left)",
+                    max(0.0, self.baseline_settle_sec - (received_at - self.baseline_candidate_since).to_sec()),
+                )
+                return
+
             self.try_initialize_slots(stamp)
             return
 
         self.evaluate_slots(observed, stamp)
 
-    def start_new_round(self) -> None:
-        self.slots.clear()
-        self.slots_initialized = False
-        self.last_selection_time = rospy.Time(0)
-        if self.latest_observed:
-            latest_stamp = (
-                self.latest_observed_stamp
-                if self.latest_observed_stamp != rospy.Time()
-                else rospy.Time.now()
-            )
-            self.try_initialize_slots(latest_stamp)
-
     def try_initialize_slots(self, stamp: rospy.Time) -> None:
-        if len(self.latest_observed) < self.min_slots_to_initialize:
-            rospy.logwarn_throttle(
-                2.0,
-                "player_selection.py waiting for enough slots to initialize (%d/%d)",
-                len(self.latest_observed),
-                self.min_slots_to_initialize,
-            )
-            return
-
         self.slots.clear()
         for block_id, block in self.latest_observed.items():
             self.slots[block_id] = SlotState(
@@ -104,7 +101,8 @@ class PlayerSelectionNode:
             )
 
         self.slots_initialized = True
-        rospy.loginfo("player_selection.py initialized %d slots for WAITING_PLAYER", len(self.slots))
+        self.baseline_candidate_since = rospy.Time(0)
+        rospy.loginfo("player_selection.py initialized %d slots for always-on selection", len(self.slots))
 
     def evaluate_slots(self, observed: Dict[int, object], stamp: rospy.Time) -> None:
         for slot in self.slots.values():
@@ -154,7 +152,7 @@ class PlayerSelectionNode:
 
 
 def main() -> None:
-    rospy.init_node("player_selection_node")
+    rospy.init_node("player_selection")
     PlayerSelectionNode()
     rospy.spin()
 

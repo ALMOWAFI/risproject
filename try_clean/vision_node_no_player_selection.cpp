@@ -1338,7 +1338,7 @@ private:
 }  // namespace memory_game_vision
 
 int main(int argc, char** argv) {
-    ros::init(argc, argv, "vision_node_no_player_selection");
+    ros::init(argc, argv, "vision_node");
     memory_game_vision::VisionNode node;
     ros::spin();
     return 0;
