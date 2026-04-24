@@ -143,6 +143,11 @@ class MotionMoveItNode {
 
       PublishStatus(status_pub_, "AT_TARGET", next.id);
 
+      if (target_hold_sec_ > 0.0) {
+        ROS_INFO("Holding at target %d for %.1fs", next.id, target_hold_sec_);
+        ros::Duration(target_hold_sec_).sleep();
+      }
+
       if (return_home_) {
         PublishStatus(status_pub_, "RETURNING_HOME", next.id);
         if (!returnHome()) {
@@ -375,6 +380,7 @@ class MotionMoveItNode {
   double workspace_min_z_ = -10.0;
   double workspace_max_z_ = 10.0;
   bool keep_current_orientation_ = true;
+  double target_hold_sec_ = 1.0;
 
   std::unique_ptr<moveit::planning_interface::MoveGroupInterface> move_group_;
   std::vector<double> home_joint_values_;

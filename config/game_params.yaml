@@ -98,6 +98,7 @@ motion_moveit_node:
   planning_group: "panda_arm"
   pose_frame: "panda_link0"
   require_pose_frame_match: true
+  target_hold_sec: 1.0
   
   workspace_enable: false
   workspace_min_x: -10.0
