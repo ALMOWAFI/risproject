@@ -65,17 +65,28 @@ This paper describes the design and implementation of such a game
 system, developed over the course of a semester within the Robotics
 and Intelligent Systems Lab 2 course. The hardware platform consists
 of a Franka Emika Panda 7-DOF arm and an Intel RealSense RGB-D camera
-mounted to observe a tabletop workspace. The software is implemented
-as a ROS1 package using standard middleware components: OpenCV for
-image processing, MoveIt for motion planning, and \texttt{tf2} for
-coordinate frame management.
+mounted to observe a tabletop workspace (Fig.~\ref{fig:setup}). The
+software is implemented as a ROS1 package using standard middleware
+components: OpenCV for image processing, MoveIt for motion planning,
+and \texttt{tf2} for coordinate frame management.
+
+\begin{figure}[t]
+\centering
+\fbox{\rule{0pt}{3.5cm}\rule{0.85\columnwidth}{0pt}}
+% \includegraphics[width=\columnwidth]{figures/lab_setup.jpg}
+\caption{Lab setup: Franka Emika Panda arm, Intel RealSense camera
+on a mounted pole, and three colored blocks on the tabletop workspace.}
+\label{fig:setup}
+\end{figure}
 
 The remainder of the paper is organized as follows. Section~\ref{sec:game}
 describes the game as originally envisioned and as ultimately implemented.
-Section~\ref{sec:arch} presents the software architecture. Section~\ref{sec:methods}
-discusses the methods used for the major subsystems. Section~\ref{sec:decisions}
-analyzes three significant design decisions in detail. Sections~\ref{sec:future}
-and~\ref{sec:lessons} discuss future work and lessons learned.
+Section~\ref{sec:arch} presents the software architecture (Fig.~\ref{fig:arch}).
+Section~\ref{sec:methods} discusses the methods used for the major
+subsystems (Figs.~\ref{fig:vision_pipeline} and~\ref{fig:state_machine}).
+Section~\ref{sec:decisions} analyzes three significant design decisions
+in detail. Sections~\ref{sec:future} and~\ref{sec:lessons} discuss future
+work and lessons learned.
 
 \section{Game Description}
 \label{sec:game}
@@ -172,9 +183,23 @@ in principle but was not prioritized.
 
 The software is structured as a ROS1 (Noetic) package named
 \texttt{memory\_game}. Functionality is divided across four primary
-nodes plus supporting infrastructure. All inter-node communication uses
-standard ROS publish/subscribe topics; no service or action interfaces
-are required for the main game loop.
+nodes plus supporting infrastructure (Fig.~\ref{fig:arch}). All
+inter-node communication uses standard ROS publish/subscribe topics;
+no service or action interfaces are required for the main game loop.
+
+\begin{figure}[t]
+\centering
+\fbox{\rule{0pt}{5.5cm}\rule{0.85\columnwidth}{0pt}}
+% \includegraphics[width=\columnwidth]{figures/architecture.png}
+\caption{System architecture: ROS nodes and the topic communication
+between them. The vision pipeline produces \texttt{/detected\_blocks},
+which the player-selection node and the game node consume. The game
+node dispatches sequences to the motion node via
+\texttt{/target\_sequence} and receives motion progress via
+\texttt{/motion\_status}. The UI server (not shown) subscribes to all
+game-relevant topics.}
+\label{fig:arch}
+\end{figure}
 
 \subsection{ROS Node Organization}
 
@@ -266,8 +291,22 @@ This section describes the methods used by each of the major subsystems.
 \label{sec:vision}
 
 The vision pipeline implemented in \texttt{vision\_node} is a classical
-image processing chain. Each color camera frame triggers the following
-sequence of operations:
+image processing chain (Fig.~\ref{fig:vision_pipeline}). Each color
+camera frame triggers the following sequence of operations:
+
+\begin{figure}[t]
+\centering
+\fbox{\rule{0pt}{6cm}\rule{0.85\columnwidth}{0pt}}
+% \includegraphics[width=\columnwidth]{figures/vision_pipeline.png}
+\caption{Vision pipeline. A color frame arriving from the RealSense
+driver is decoded, synchronized with the closest depth frame, masked
+to the configured crop rectangle, converted to HSV, and processed
+per-color through thresholding, morphological cleanup, contour
+extraction, centroid computation, depth lookup, 3D projection, TF
+transformation, and temporal smoothing. Each stage can reject a
+candidate, in which case the orchestrator tries the next-best one.}
+\label{fig:vision_pipeline}
+\end{figure}
 
 \textit{1) Image acquisition and synchronization.} The RGB image is
 received via the ROS image topic. Because depth and color are published
@@ -406,15 +445,62 @@ motion with planned joint targets than with
 \texttt{computeCartesianPath}, which occasionally produced jerky or
 infeasible plans for the dip motion in our hover-point-hover pattern.
 
+\subsection{Game State Machine}
+\label{sec:game_state}
+
+The \texttt{game\_node} owns the overall game flow as a state machine
+(Fig.~\ref{fig:state_machine}). The states are: \texttt{IDLE} (initial),
+\texttt{WAITING\_FOR\_BLOCKS} (requires three stable detections before a
+round), \texttt{SHOWING\_SEQUENCE} (sequence dispatched to motion),
+\texttt{WAITING\_PLAYER} (player reproduces the sequence by removing
+blocks), \texttt{CHECKING\_INPUT} (verifying the player's choices),
+\texttt{ROUND\_PAUSE} (brief delay before the next round), and the
+terminal states \texttt{MOTION\_FAILED} and \texttt{GAME\_OVER}.
+
+Transitions are driven by ROS messages: motion status updates trigger
+the move from \texttt{SHOWING\_SEQUENCE} to \texttt{WAITING\_PLAYER},
+player selection events trigger the move into \texttt{CHECKING\_INPUT},
+and motion failures or sequence-completion-with-error transition into
+\texttt{MOTION\_FAILED} or \texttt{GAME\_OVER}. The
+\texttt{ROUND\_PAUSE} timer determines how quickly the next round
+begins after a successful round.
+
+\begin{figure}[t]
+\centering
+\fbox{\rule{0pt}{5cm}\rule{0.85\columnwidth}{0pt}}
+% \includegraphics[width=\columnwidth]{figures/game_state_machine.png}
+\caption{Game node state machine. Transitions are triggered by ROS
+messages (motion status, player selection) or internal timeouts
+(round pause, player timeout).}
+\label{fig:state_machine}
+\end{figure}
+
 \section{Design Decisions}
 \label{sec:decisions}
 
 Many design choices were made during development. This section
 analyzes three decisions that had the largest impact on the system's
-behavior and the team's effort budget. For each, we describe the
-implemented choice, a credible alternative path that could have
-produced a working minimum-viable demonstration, and the reasons for
-the chosen path.
+behavior and the team's effort budget. Table~\ref{tab:decisions}
+summarizes them; the subsections that follow give the full reasoning.
+For each, we describe the implemented choice, a credible alternative
+path that could have produced a working minimum-viable demonstration,
+and the reasons for the chosen path.
+
+\begin{table}[t]
+\centering
+\caption{Major Design Decisions: Summary}
+\label{tab:decisions}
+\renewcommand{\arraystretch}{1.2}
+\begin{tabular}{p{0.30\columnwidth}p{0.25\columnwidth}p{0.30\columnwidth}}
+\toprule
+\textbf{Decision} & \textbf{Chose} & \textbf{Alternative} \\
+\midrule
+Block detection & HSV thresholding & Trained CNN (YOLO) \\
+False-positive filtering & 2D image crop & 3D workspace box \\
+Motion dispatch & Full sequence per message & One target at a time \\
+\bottomrule
+\end{tabular}
+\end{table}
 
 \subsection{Decision~1: HSV Thresholding vs. Deep Learning Detection}
 
@@ -466,10 +552,22 @@ anything useful. The cycle of ``add workspace, blocks get rejected,
 widen workspace, doesn't filter anymore'' repeated several times in
 the commit history.
 
-The image-space crop avoids these failure modes. Pixel coordinates do
-not depend on TF or depth accuracy: the crop is fixed relative to the
-camera image, and as long as the camera mount does not move, the
-crop remains correct. Tuning is visual: the team subscribes to a
+The image-space crop avoids these failure modes (Fig.~\ref{fig:crop}).
+Pixel coordinates do not depend on TF or depth accuracy: the crop is
+fixed relative to the camera image, and as long as the camera mount
+does not move, the crop remains correct.
+
+\begin{figure}[t]
+\centering
+\fbox{\rule{0pt}{4cm}\rule{0.85\columnwidth}{0pt}}
+% \includegraphics[width=\columnwidth]{figures/crop_demo.png}
+\caption{Image-space crop applied as a pre-detection mask. The full
+camera frame (left) contains the play area plus background sources
+of false positives (operator clothing, robot status LED, ambient
+objects). After masking (right), only the play area survives into the
+HSV detection stage, eliminating these false-positive sources entirely.}
+\label{fig:crop}
+\end{figure} Tuning is visual: the team subscribes to a
 \texttt{debug\_overlay} topic in \texttt{rqt\_image\_view} that draws
 the current crop rectangle as a green outline on the live camera
 image, and adjusts the four pixel coordinates until the rectangle
